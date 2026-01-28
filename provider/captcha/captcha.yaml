@@ -1,0 +1,8 @@
+# 验证码配置
+enabled: true
+ttl: 300 # 验证码有效期
+type: "click" # click slide rotate 点击滑动旋转
+mode: "text" # text image  文字还是图片
+padding: 5 # 边框宽度
+store: "memory" #验证码存储位置 memory redis
+cleanup-interval: 60 # 验证码清理间隔
