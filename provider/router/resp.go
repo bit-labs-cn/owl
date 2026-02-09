@@ -21,8 +21,8 @@ type PageResp struct {
 }
 
 type PageReq struct {
-	Page     int `json:"page"`
-	PageSize int `json:"pageSize"`
+	Page     int `json:"page" form:"page"`
+	PageSize int `json:"pageSize" form:"pageSize"`
 }
 
 func Success(ctx *gin.Context, data any) {
