@@ -6,6 +6,7 @@ import (
 	"github.com/casbin/casbin/v2/model"
 	gormadapter "github.com/casbin/gorm-adapter/v3"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var _ foundation.ServiceProvider = (*GuardProvider)(nil)
@@ -20,6 +21,7 @@ func (i *GuardProvider) Description() string {
 
 func (i *GuardProvider) Register() {
 	i.app.Register(func(db *gorm.DB) casbin.IEnforcer {
+		db = db.Session(&gorm.Session{Logger: db.Config.Logger.LogMode(logger.Error)})
 		adapter, err := gormadapter.NewAdapterByDB(db)
 		if err != nil {
 			panic(err)
