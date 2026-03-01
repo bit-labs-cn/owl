@@ -134,14 +134,12 @@ type Application struct {
 	 */
 	isRunningInConsole bool
 
-	runDir          string
-	name            string
-	menuManager     *router.MenuRepository
-	serviceProvider []foundation.ServiceProvider
-	subApps         []SubApp
-	rootCmd         *cobra.Command
-	binds           []any
-	menus           []*router.Menu
+	runDir      string
+	name        string
+	menuManager *router.MenuRepository
+	subApps     []SubApp
+	commands    []*cobra.Command
+	menus       []*router.Menu
 
 	l logContract.Logger
 }
@@ -260,7 +258,6 @@ func NewApp(apps ...SubApp) *Application {
 	err := utils.InitSnowFlakeWorker(1, 3)
 
 	i := &Application{
-		rootCmd:   &cobra.Command{Use: "owl"},
 		Container: dig.New(),
 	}
 
@@ -268,10 +265,10 @@ func NewApp(apps ...SubApp) *Application {
 	i.ensureConfDir()
 	i.registerBaseBindings()
 	i.registerBaseServiceProviders()
-	i.newSubApp(apps...)
 
 	PanicIf(err)
 
+	i.subApps = apps
 	return i
 }
 
@@ -307,20 +304,43 @@ func PanicIf(err error) {
 		panic(err)
 	}
 }
-func (i *Application) Run() {
+
+// WebShell 使用Web壳(接口调用) 使用系统
+func (i *Application) WebShell() {
+	i.newSubApp(i.subApps...)
+
 	err := i.Invoke(func(e *router.RouterServiceProvider) {
 		e.Run()
 	})
 	PanicIf(err)
 }
 
+// ConsoleShell 使用命令行壳（方法调用）使用系统
+func (i *Application) ConsoleShell(rootCmd *cobra.Command) {
+	i.isRunningInConsole = true
+
+	i.newSubApp(i.subApps...)
+
+	rootCmd.AddCommand(i.commands...)
+	cobra.CheckErr(rootCmd.Execute())
+}
+
 func (i *Application) ShowProviders() {
 	i.l.Info("============================已注册服务提供者==========================================")
-	for _, provider := range i.serviceProvider {
+	for _, provider := range i.serviceProviders {
 		providerType := reflect.TypeOf(provider).String()
 		i.l.Info(providerType, provider.Description())
 	}
 
+	i.l.Info("======================================================================================")
+
+}
+
+func (i *Application) ShowSubApps() {
+	i.l.Info("================================已加载的子应用==========================================")
+	for _, app := range i.subApps {
+		i.l.Info(app.Name())
+	}
 	i.l.Info("======================================================================================")
 
 }
@@ -335,7 +355,8 @@ func (i *Application) registerBaseServiceProviders() {
 		&validator.ValidatorServiceProvider{},
 	}
 
-	i.bootServiceProviders(baseProviders...)
+	i.serviceProviders = append(i.serviceProviders, baseProviders...)
+	i.registerServiceProviders(baseProviders...)
 
 	err := i.Invoke(func(l logContract.Logger) {
 		i.l = l
@@ -344,58 +365,68 @@ func (i *Application) registerBaseServiceProviders() {
 	PanicIf(err)
 }
 
-func (i *Application) bootServiceProviders(provider ...foundation.ServiceProvider) {
+func (i *Application) registerServiceProviders(provider ...foundation.ServiceProvider) {
 
 	for _, serviceProvider := range provider {
+		// 将服务提供者注入 app 实例
 		i.injectAppInstance(serviceProvider)
 		serviceProvider.Register()
 
+		// 服务提供者配置文件生成
 		cfgFileGen := serviceProvider.Conf()
-		if cfgFileGen != nil {
-			for fileName, content := range cfgFileGen {
-				confFile := i.GetConfigPath() + "/" + fileName
-				_, err := os.Stat(confFile)
-				if os.IsNotExist(err) {
-					_ = os.WriteFile(confFile, []byte(content), 0644)
-				}
+		for fileName, content := range cfgFileGen {
+			confFile := i.GetConfigPath() + "/" + fileName
+			_, err := os.Stat(confFile)
+			if os.IsNotExist(err) {
+				_ = os.WriteFile(confFile, []byte(content), 0644)
 			}
 		}
+
 	}
 }
 
-func (i *Application) newSubApp(apps ...SubApp) {
-	for _, app := range apps {
+func (i *Application) newSubApp(subApps ...SubApp) {
+
+	for _, app := range subApps {
+		// 为子应用注入 app 实例
 		i.injectAppInstance(app)
-		i.subApps = append(i.subApps, app)
+
+		for _, bind := range app.Binds() {
+			err := i.Provide(bind)
+			PanicIf(err)
+		}
+
+		i.commands = append(i.commands, app.Commands()...)
+
+		i.serviceProviders = append(i.serviceProviders, app.ServiceProviders()...)
 	}
 
-	for _, app := range i.subApps {
-		i.binds = append(i.binds, app.Binds()...)
-		i.serviceProvider = append(i.serviceProvider, app.ServiceProviders()...)
+	// 注册所有服务提供者
+	i.registerServiceProviders(i.serviceProviders...)
+
+	// 判断是否是命令行模式，非命令行模式注册路由和添加菜单
+	if i.isRunningInConsole {
+		for _, app := range i.subApps {
+			app.Bootstrap()
+		}
+
+	} else {
+		for _, app := range i.subApps {
+			app.RegisterRouters()
+			i.menus = append(i.menus, app.Menu()...)
+			app.Bootstrap()
+		}
+		// 将所有子应用的菜单添加到菜单管理器
+		i.menuManager.AddMenu(i.menus...)
 	}
 
-	i.bootServiceProviders(i.serviceProvider...)
-
-	for _, bind := range i.binds {
-		err := i.Provide(bind)
-		PanicIf(err)
-	}
-
-	for _, app := range i.subApps {
-		app.RegisterRouters()
-		i.menus = append(i.menus, app.Menu()...)
-		i.rootCmd.AddCommand(app.Commands()...)
-		app.Bootstrap()
-	}
-
-	// 将所有子应用的菜单添加到菜单管理器
-	i.menuManager.AddMenu(i.menus...)
-
-	for _, serviceProvider := range i.serviceProvider {
+	for _, serviceProvider := range i.serviceProviders {
 		serviceProvider.Boot()
 	}
 
+	// 显示信息
 	i.ShowProviders()
+	i.ShowSubApps()
 }
 
 func (i *Application) injectAppInstance(target any) {

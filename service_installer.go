@@ -11,117 +11,33 @@ import (
 	"runtime"
 	"strings"
 
+	"bit-labs.cn/owl/utils"
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 	"gopkg.in/guoliang1994/go-i18n.v2"
 	"gopkg.in/guoliang1994/go-i18n.v2/driver"
 )
 
-type program struct {
-	binName     string
-	description string
-	version     string
-	program     service.Interface
-	service     service.Service
-	rootCmd     *cobra.Command
-	lang        *i18n.I18N
+type Installable interface {
+	service.Interface
+	GetBinName() string
+	GetDisplayName() string
+	GetDescription() string
+	GetVersion() string
 }
 
-func (p *program) AddCommand(cmd ...*cobra.Command) *program {
-	p.rootCmd.AddCommand(cmd...)
-	return p
-}
-
-type installer struct {
-	programs       []*program
-	rootCmd        *cobra.Command
-	programLen     int
-	hasRootProgram bool
-}
-
-func NewInstaller() *installer {
-	return &installer{}
-}
-
-func (i *installer) RootProgram(binName, description string) *installer {
-	i.rootCmd = &cobra.Command{
-		Use:               binName,
-		Short:             description,
-		Long:              description,
-		CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
-	}
-	i.hasRootProgram = true
-	return i
-}
-func (i *installer) AddProgram(p *program) *installer {
-	i.programs = append(i.programs, p)
-	i.programLen++
-	return i
-}
-func (i *installer) execute() {
-	for _, p := range i.programs {
-		p.start()
-		p.stop()
-		p.restart()
-		p.install()
-		p.uninstall()
-		p.status()
-		p.ver()
-		p.run()
-		p.Lang()
-	}
-	cobra.CheckErr(i.rootCmd.Execute())
-}
-func (i *installer) isMultiInstall() bool {
-	return i.programLen > 1
-}
-func (i *installer) Install() {
-	for _, p := range i.programs {
-		// 初始化 service
-		options := make(service.KeyValue)
-		svcConfig := &service.Config{
-			Name:        p.binName,
-			DisplayName: p.binName,
-			Description: p.description,
-			Option:      options,
-		}
-
-		if runtime.GOOS != "windows" {
-			svcConfig.Dependencies = []string{
-				"Requires=network.target",
-				"After=network-online.target syslog.target"}
-			svcConfig.UserName = "root"
-		}
-		var err error
-		// 增加 service 运行时的参数，最后得到 nps run
-		if i.isMultiInstall() {
-			if i.hasRootProgram {
-				// 如果有多个程序，则需要增加程序名称再 run
-				svcConfig.Arguments = append(svcConfig.Arguments, p.binName)
-				i.rootCmd.AddCommand(p.rootCmd)
-			} else {
-				i.rootCmd = p.rootCmd
-				fmt.Println(p.lang.T("installMultiProgram"), p.binName)
-			}
-		} else {
-			// 如果只有一个程序，那根程序就等于子程序
-			i.rootCmd = p.rootCmd
-		}
-		svcConfig.Arguments = append(svcConfig.Arguments, "run")
-		p.service, err = service.New(p.program, svcConfig)
-		if err != nil {
-			fmt.Println(err)
-		}
-	}
-	i.execute()
+type ServiceCommandGetter struct {
+	app     Installable
+	service service.Service
+	lang    *i18n.I18N
+	rootCmd *cobra.Command
 }
 
 //go:embed lang
 var langFs embed.FS
 
-func NewProgram(binName, description, version string, p service.Interface) *program {
-
-	if err := IsValidBinaryName(binName); err != nil {
+func NewServiceCommandGetter(app Installable) *cobra.Command {
+	if err := IsValidBinaryName(app.GetBinName()); err != nil {
 		panic("Invalid binary name: " + err.Error())
 	}
 
@@ -137,128 +53,155 @@ func NewProgram(binName, description, version string, p service.Interface) *prog
 		l = i18n.NewI18N(string(lang))
 	}
 	l.AddLang(embedDriver)
-	app := &program{
-		binName:     binName,
-		description: description,
-		version:     version,
-		program:     p,
-		lang:        l,
-	}
-	// 程序的名称就是根命令
-	app.rootCmd = &cobra.Command{
-		Use:  binName,
-		Long: description,
-	}
-	// 隐藏默认的命令
-	app.rootCmd.CompletionOptions.HiddenDefaultCmd = true
-	return app
-}
 
-func (i *program) install() {
+	i := &ServiceCommandGetter{
+		rootCmd: &cobra.Command{
+			Use:   app.GetBinName(),
+			Short: app.GetVersion(),
+		},
+		lang: l,
+		app:  app,
+	}
+	i.rootCmd.CompletionOptions.HiddenDefaultCmd = true
+
+	// 初始化 service
+	options := make(service.KeyValue)
+	svcConfig := &service.Config{
+		Name:        app.GetBinName(),
+		DisplayName: app.GetDisplayName(),
+		Description: app.GetDescription(),
+		Option:      options,
+	}
+
+	if runtime.GOOS != "windows" {
+		svcConfig.Dependencies = []string{
+			"Requires=network.target",
+			"After=network-online.target syslog.target"}
+		svcConfig.UserName = "root"
+	}
+
+	svcConfig.Arguments = append(svcConfig.Arguments, "run")
+	i.service, err = service.New(app, svcConfig)
+	if err != nil {
+		utils.PrintLnRed("Failed to create service: " + err.Error())
+	}
+
+	i.start()
+	i.stop()
+	i.restart()
+	i.install()
+	i.uninstall()
+	i.status()
+	i.run()
+	i.Lang()
+
+	return i.rootCmd
+}
+func (i *ServiceCommandGetter) install() {
 	use := "install"
 	var c = &cobra.Command{
 		Use:   use,
-		Short: i.lang.T("install.short", i.binName),
-		Long:  i.lang.T("install.long", i.binName),
+		Short: i.lang.T("install.short", i.app.GetBinName()),
+		Long:  i.lang.T("install.long", i.app.GetBinName()),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = i.service.Stop()
 			_ = i.service.Uninstall()
 			err := i.service.Install()
 			if err != nil {
-				return errors.New(i.lang.T("install.fail", i.binName, err.Error()))
+				return errors.New(i.lang.T("install.fail", i.app.GetBinName(), err.Error()))
 			}
-			fmt.Println(i.lang.T("install.success", i.binName))
+			fmt.Println(i.lang.T("install.success", i.app.GetBinName()))
 			return nil
 		},
 	}
 	i.rootCmd.AddCommand(c)
 }
 
-func (i *program) uninstall() {
+func (i *ServiceCommandGetter) uninstall() {
 	use := "uninstall"
 	var c = &cobra.Command{
 		Use:   use,
-		Short: i.lang.T("uninstall.short", i.binName),
-		Long:  i.lang.T("uninstall.short", i.binName),
+		Short: i.lang.T("uninstall.short", i.app.GetBinName()),
+		Long:  i.lang.T("uninstall.long", i.app.GetBinName()),
 		RunE:  i.control(use),
 	}
 	i.rootCmd.AddCommand(c)
 }
 
-func (i *program) run() {
+func (i *ServiceCommandGetter) run() {
 	use := "run"
 	var c = &cobra.Command{
 		Use:   use,
-		Short: i.lang.T("foreground.short", i.binName),
-		Long:  i.lang.T("foreground.short", i.binName),
+		Short: i.lang.T("foreground.short", i.app.GetBinName()),
+		Long:  i.lang.T("foreground.short", i.app.GetBinName()),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return i.service.Run()
 		},
 	}
 	i.rootCmd.AddCommand(c)
 }
-func (i *program) start() {
+func (i *ServiceCommandGetter) start() {
 	use := "start"
 	var c = &cobra.Command{
 		Use:   use,
-		Short: i.lang.T("start.short", i.binName),
-		Long:  i.lang.T("start.short", i.binName),
+		Short: i.lang.T("start.short", i.app.GetBinName()),
+		Long:  i.lang.T("start.short", i.app.GetBinName()),
 		RunE:  i.control(use),
 	}
 	i.rootCmd.AddCommand(c)
 }
 
-func (i *program) stop() {
+func (i *ServiceCommandGetter) stop() {
 	use := "stop"
 	var c = &cobra.Command{
 		Use:   use,
-		Short: i.lang.T("stop.short", i.binName),
-		Long:  i.lang.T("stop.short", i.binName),
+		Short: i.lang.T("stop.short", i.app.GetBinName()),
+		Long:  i.lang.T("stop.long", i.app.GetBinName()),
 		RunE:  i.control(use),
 	}
 	i.rootCmd.AddCommand(c)
 }
-func (i *program) restart() {
+func (i *ServiceCommandGetter) restart() {
 	use := "restart"
 	var c = &cobra.Command{
 		Use:   use,
-		Short: i.lang.T("restart.short", i.binName),
-		Long:  i.lang.T("restart.long", i.binName),
+		Short: i.lang.T("restart.short", i.app.GetBinName()),
+		Long:  i.lang.T("restart.long", i.app.GetBinName()),
 		RunE:  i.control(use),
 	}
 	i.rootCmd.AddCommand(c)
 }
-func (i *program) status() {
+func (i *ServiceCommandGetter) status() {
 	use := "status"
 	var c = &cobra.Command{
 		Use:   use,
-		Short: i.lang.T("status.short", i.binName),
-		Long:  i.lang.T("status.short", i.binName),
+		Short: i.lang.T("status.short", i.app.GetBinName()),
+		Long:  i.lang.T("status.short", i.app.GetBinName()),
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Println("")
 		},
 	}
 	i.rootCmd.AddCommand(c)
 }
-func (i *program) ver() {
+func (i *ServiceCommandGetter) ver() {
 	use := "version"
 	var c = &cobra.Command{
 		Use:   use,
-		Short: i.lang.T("version.short", i.binName),
-		Long:  i.lang.T("version.short", i.binName),
+		Short: i.lang.T("version.short", i.app.GetBinName()),
+		Long:  i.lang.T("version.short", i.app.GetBinName()),
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println(i.version)
+
 		},
 	}
 	c.Flags()
 	i.rootCmd.AddCommand(c)
 }
-func (i *program) Lang() {
+func (i *ServiceCommandGetter) Lang() {
 	use := "lang"
 	var langCmd = &cobra.Command{
 		Use:   use,
-		Short: i.lang.T("lang.short", i.binName),
-		Long:  i.lang.T("lang.short", i.binName),
+		Short: i.lang.T("lang.short", i.app.GetBinName()),
+		Long:  i.lang.T("lang.short", i.app.GetBinName()),
 		Run: func(cmd *cobra.Command, args []string) {
 			lang := cmd.Flag("language").Value.String()
 			err := ioutil.WriteFile("lang.conf", []byte(lang), 0777)
@@ -273,15 +216,15 @@ func (i *program) Lang() {
 }
 
 // start stop restart
-func (i *program) control(command string) func(cmd *cobra.Command, args []string) error {
+func (i *ServiceCommandGetter) control(command string) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		if service.Platform() == "unix-systemv" {
-			terminal := exec.Command("/etc/init.d/"+i.binName, command)
+			terminal := exec.Command("/etc/init.d/"+i.app.GetBinName(), command)
 			return terminal.Run()
 		}
 		err := service.Control(i.service, command)
 		if err != nil {
-			return errors.New(i.lang.T(command+".fail", i.binName, err.Error()))
+			return errors.New(i.lang.T(command+".fail", i.app.GetBinName(), err.Error()))
 		}
 		return nil
 	}
