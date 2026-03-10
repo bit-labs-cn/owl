@@ -29,8 +29,8 @@ func Success(ctx *gin.Context, data any) {
 	ctx.JSON(http.StatusOK, Resp{Success: true, Msg: "操作成功", Data: data})
 }
 
-func Fail(ctx *gin.Context, data any) {
-	ctx.JSON(http.StatusOK, Resp{Success: false, Msg: "操作失败", Data: data})
+func Fail(ctx *gin.Context, data error) {
+	ctx.JSON(http.StatusOK, Resp{Success: false, Msg: data.Error(), Data: data})
 }
 
 func FailWithMsg(ctx *gin.Context, msg string, data any) {
