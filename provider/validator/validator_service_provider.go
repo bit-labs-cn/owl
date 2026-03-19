@@ -5,10 +5,15 @@ import (
 	"strings"
 
 	"bit-labs.cn/owl/contract/foundation"
+	"github.com/go-playground/locales/zh"
+	ut "github.com/go-playground/universal-translator"
 	"github.com/go-playground/validator/v10"
+	zhTranslations "github.com/go-playground/validator/v10/translations/zh"
 )
 
 var _ foundation.ServiceProvider = (*ValidatorServiceProvider)(nil)
+
+var trans ut.Translator
 
 type ValidatorServiceProvider struct {
 	app foundation.Application
@@ -22,6 +27,9 @@ func (i *ValidatorServiceProvider) Register() {
 	i.app.Register(func() *validator.Validate {
 		v := validator.New(validator.WithRequiredStructEnabled())
 		v.RegisterTagNameFunc(func(fld reflect.StructField) string {
+			if label := fld.Tag.Get("label"); label != "" {
+				return label
+			}
 			name := fld.Tag.Get("json")
 			if name == "" {
 				return fld.Name
@@ -32,6 +40,12 @@ func (i *ValidatorServiceProvider) Register() {
 			}
 			return name
 		})
+
+		zhLocale := zh.New()
+		uni := ut.New(zhLocale, zhLocale)
+		trans, _ = uni.GetTranslator("zh")
+		_ = zhTranslations.RegisterDefaultTranslations(v, trans)
+
 		return v
 	})
 }

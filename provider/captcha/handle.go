@@ -21,7 +21,7 @@ import (
 func (s *Service) handleGenerate(ctx *gin.Context) {
 	var req GenerateReq
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		router.BadRequest(ctx, err.Error())
+		router.Fail(ctx, err)
 		return
 	}
 	res, err := s.Generate(ctx.Request.Context(), req.Type)
@@ -46,7 +46,7 @@ func (s *Service) handleGenerate(ctx *gin.Context) {
 func (s *Service) handleVerify(ctx *gin.Context) {
 	var req VerifyReq
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		router.BadRequest(ctx, err.Error())
+		router.Fail(ctx, err)
 		return
 	}
 	ok, err := s.Verify(ctx.Request.Context(), &req)

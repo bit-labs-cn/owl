@@ -8,8 +8,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const LoggerContextKey = "__logger__"
+
 func Recovery(logger logContract.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		c.Set(LoggerContextKey, logger)
+
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				requestID, _ := c.Get("request_id")

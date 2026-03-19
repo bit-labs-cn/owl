@@ -1,9 +1,15 @@
 package router
 
 import (
+	"encoding/json"
+	stderrors "errors"
 	"net/http"
+	"unicode"
 
+	errContract "bit-labs.cn/owl/contract/errors"
+	owlvalidator "bit-labs.cn/owl/provider/validator"
 	"github.com/gin-gonic/gin"
+	validatorv10 "github.com/go-playground/validator/v10"
 )
 
 type Resp struct {
@@ -29,8 +35,30 @@ func Success(ctx *gin.Context, data any) {
 	ctx.JSON(http.StatusOK, Resp{Success: true, Msg: "操作成功", Data: data})
 }
 
-func Fail(ctx *gin.Context, data error) {
-	ctx.JSON(http.StatusOK, Resp{Success: false, Msg: data.Error(), Data: data})
+func Fail(ctx *gin.Context, err error) {
+	var ves validatorv10.ValidationErrors
+	var bizErr *errContract.BizError
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+
+	switch {
+	case stderrors.As(err, &ves):
+		BadRequest(ctx, owlvalidator.TranslateValidationErrors(err))
+	case stderrors.As(err, &syntaxErr), stderrors.As(err, &typeErr):
+		BadRequest(ctx, "请求参数格式不正确")
+	case stderrors.As(err, &bizErr):
+		ctx.JSON(http.StatusOK, Resp{Code: bizErr.Code, Success: false, Msg: bizErr.Message})
+	default:
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		if isSafeErrorMessage(msg) {
+			ctx.JSON(http.StatusOK, Resp{Success: false, Msg: msg})
+			return
+		}
+		InternalError(ctx, err)
+	}
 }
 
 func FailWithMsg(ctx *gin.Context, msg string, data any) {
@@ -50,7 +78,18 @@ func Forbidden(ctx *gin.Context, msg string) {
 }
 
 func InternalError(ctx *gin.Context, err error) {
-	ctx.JSON(http.StatusInternalServerError, Resp{Success: false, Msg: err.Error()})
+	requestID, _ := ctx.Get("request_id")
+	logger := GetLoggerFromCtx(ctx)
+	if logger != nil && err != nil {
+		logger.Error(
+			"internal error",
+			" requestId:", requestID,
+			" method:", ctx.Request.Method,
+			" path:", ctx.Request.URL.Path,
+			" error:", err.Error(),
+		)
+	}
+	ctx.JSON(http.StatusInternalServerError, Resp{Success: false, Msg: "服务器内部错误，请稍后重试"})
 }
 
 func PageSuccess(ctx *gin.Context, total int, currentPage int, pageSize int, data any) {
@@ -60,4 +99,16 @@ func PageSuccess(ctx *gin.Context, total int, currentPage int, pageSize int, dat
 		CurrentPage: currentPage,
 		PageSize:    pageSize,
 	})
+}
+
+func isSafeErrorMessage(msg string) bool {
+	if msg == "" {
+		return false
+	}
+	for _, r := range msg {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
