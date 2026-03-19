@@ -3,6 +3,7 @@ package router
 import (
 	"encoding/json"
 	stderrors "errors"
+	"fmt"
 	"net/http"
 	"unicode"
 
@@ -44,8 +45,10 @@ func Fail(ctx *gin.Context, err error) {
 	switch {
 	case stderrors.As(err, &ves):
 		BadRequest(ctx, owlvalidator.TranslateValidationErrors(err))
-	case stderrors.As(err, &syntaxErr), stderrors.As(err, &typeErr):
-		BadRequest(ctx, "请求参数格式不正确")
+	case stderrors.As(err, &typeErr):
+		BadRequest(ctx, formatUnmarshalTypeError(typeErr))
+	case stderrors.As(err, &syntaxErr):
+		BadRequest(ctx, formatJSONSyntaxError(syntaxErr))
 	case stderrors.As(err, &bizErr):
 		ctx.JSON(http.StatusOK, Resp{Code: bizErr.Code, Success: false, Msg: bizErr.Message})
 	default:
@@ -99,6 +102,20 @@ func PageSuccess(ctx *gin.Context, total int, currentPage int, pageSize int, dat
 		CurrentPage: currentPage,
 		PageSize:    pageSize,
 	})
+}
+
+// formatUnmarshalTypeError 生成类型错误提示：字段、期望类型、实际传入值
+func formatUnmarshalTypeError(e *json.UnmarshalTypeError) string {
+	field := e.Field
+	if e.Struct != "" {
+		field = e.Struct + "." + field
+	}
+	return fmt.Sprintf("字段 %s 需要 %s 类型，实际传入: %s", field, e.Type.String(), e.Value)
+}
+
+// formatJSONSyntaxError 生成 JSON 语法错误提示
+func formatJSONSyntaxError(e *json.SyntaxError) string {
+	return fmt.Sprintf("请求体 JSON 语法错误（offset %d）: %s", e.Offset, e.Error())
 }
 
 func isSafeErrorMessage(msg string) bool {
