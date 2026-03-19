@@ -379,6 +379,9 @@ func (i *Application) registerServiceProviders(provider ...foundation.ServicePro
 			_, err := os.Stat(confFile)
 			if os.IsNotExist(err) {
 				_ = os.WriteFile(confFile, []byte(content), 0644)
+			} else {
+				// 检查现有配置与嵌入默认配置的键是否一致，缺少则警告
+				conf.ValidateConfigKeys(serviceProvider.Description(), fileName, content, i.GetConfigPath())
 			}
 		}
 
