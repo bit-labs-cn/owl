@@ -1,426 +1,493 @@
-# 最小可运行子系统模板
+<!-- markdownlint-disable MD010 -->
 
-本篇给出一套可以直接照着搭的新子系统骨架。目标不是覆盖全部能力，而是提供一个**最小可运行、可建表、可访问接口**的模板，适合作为 AI 与开发者的起点。
+# user 完整链路示例模板（owl-admin）
+
+按 `owl-admin` 里的 `user` 模块真实链路组织模板。  
+目标是让你在新增后台模块时，能直接照着 `user` 这条链路落地：`app -> route -> model -> repository -> service -> handle -> event/listener -> migrate`。
 
 ## 适用场景
 
-- 新建一个独立仓库，基于 `owl` 启动 HTTP 服务。
-- 不需要 RBAC、JWT、Redis 锁等复杂能力，先跑通一个公开 CRUD API。
-- 后续再按需追加 `redis`、`permission`、`jwt`、`storage` 等 Provider。
+- 你要在 `owl-admin` 里新增模块，希望直接照着现有 `user` 模块的业务接线方式写代码。
+- 你希望参考一个已上线风格的“完整链路”，而不是“独立子系统最小起步”。
+- 你的子系统会依赖 `owl` 和 `admin`，登录态与权限体系由上层承接，不需要在子系统里自己实现鉴权中间件。
+- 你接受示例包含 `redis locker`、`event bus`、菜单/角色协作这些真实复杂度。
 
-## 最小目录结构
+## 示例文件清单（对应 user 链路）
 
 ```text
-my-order/
-├── go.mod
-├── main.go
+owl-admin/
 └── app/
     ├── app.go
     ├── route/
     │   └── api.go
-    ├── database/
-    │   └── auto_migrate_gen.go
     ├── model/
-    │   └── order.go
+    │   └── user.go
     ├── repository/
-    │   └── order.go
+    │   └── user.go
     ├── service/
-    │   └── order_service.go
-    └── handle/
-        └── v1/
-            └── order_handle.go
+    │   └── user_service.go
+    ├── handle/
+    │   └── v1/
+    │       └── user_handle.go
+    ├── event/
+    │   └── assign_role_to_user.go
+    ├── listener/
+    │   └── listener.go
+    └── database/
+        └── auto_migrate_gen.go
 ```
 
-## Provider 选择
+## `app/app.go`（Provider + Binds + Bootstrap）
 
-对于这个最小模板，`owl` 已自动注册基础 Provider：
-
-- `conf.ConfServiceProvider`
-- `log.LogServiceProvider`
-- `event.EventServiceProvider`
-- `appconf.AppConfigServiceProvider`
-- `validator.ValidatorServiceProvider`
-
-你在子系统里最少只需要补：
-
-| 场景 | 必选 Provider |
-|------|---------------|
-| 公开 HTTP API + 数据库 | `router.RouterServiceProvider`、`db.DBServiceProvider` |
-| 再加分布式锁 | 上述 + `redis.RedisServiceProvider` |
-| 再加后台权限 | 上述 + `permission.GuardProvider`、自定义 `jwt.JwtServiceProvider` |
-
-## `go.mod`
+`user` 链路所在的 `SubAppAdmin` 是完整后台应用，真实注册的 provider 如下。  
+如果你的子系统依赖 `owl` 和 `admin`，这里更重要的是理解 `Binds()`、`Bootstrap()` 和业务接线方式，而不是把权限 provider 或鉴权实现整段照搬到自己的子系统里：
 
 ```go
-module bit-labs.cn/my-order
-
-go 1.24.0
-
-require bit-labs.cn/owl v0.0.0
-
-replace bit-labs.cn/owl => ../owl
-```
-
-## `main.go`
-
-```go
-package main
-
-import (
-	"bit-labs.cn/owl"
-	order "bit-labs.cn/my-order/app"
-)
-
-func main() {
-	owl.NewApp(&order.SubAppOrder{}).WebShell()
-}
-```
-
-## `app/app.go`
-
-```go
-package order
-
-import (
-	"bit-labs.cn/my-order/app/database"
-	"bit-labs.cn/my-order/app/handle/v1"
-	"bit-labs.cn/my-order/app/repository"
-	"bit-labs.cn/my-order/app/route"
-	"bit-labs.cn/my-order/app/service"
-	"bit-labs.cn/owl"
-	"bit-labs.cn/owl/contract/foundation"
-	"bit-labs.cn/owl/provider/db"
-	"bit-labs.cn/owl/provider/router"
-	"github.com/spf13/cobra"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-)
-
-type SubAppOrder struct {
-	app foundation.Application
-}
-
-var _ owl.SubApp = (*SubAppOrder)(nil)
-
-func (i *SubAppOrder) Name() string { return "order" }
-
-func (i *SubAppOrder) ServiceProviders() []foundation.ServiceProvider {
+func (i *SubAppAdmin) ServiceProviders() []foundation.ServiceProvider {
 	return []foundation.ServiceProvider{
+		&permission.GuardProvider{},
 		&router.RouterServiceProvider{},
 		&db.DBServiceProvider{},
+		&jwt.JwtServiceProvider{},
+		&redis.RedisServiceProvider{},
+		&socketio.SocketIOServiceProvider{},
+		&captcha.CaptchaServiceProvider{},
+		&storage.StorageServiceProvider{},
 	}
 }
 
-func (i *SubAppOrder) Binds() []any {
+func (i *SubAppAdmin) Binds() []any {
 	return []any{
-		v1.NewOrderHandle,
-		service.NewOrderService,
-		repository.NewOrderRepository,
+		// ... 省略其他模块
+		v1.NewUserHandle,
+		service.NewUserService,
+		repository.NewUserRepository,
 	}
 }
 
-func (i *SubAppOrder) RegisterRouters() {
-	route.InitApi(i.app, i.Name())
-}
-
-func (i *SubAppOrder) Menu() []*router.Menu {
-	return route.InitMenu()
-}
-
-func (i *SubAppOrder) Commands() []*cobra.Command { return nil }
-
-func (i *SubAppOrder) Bootstrap() {
+func (i *SubAppAdmin) Bootstrap() {
 	i.app.Invoke(func(gdb *gorm.DB) {
 		migDB := gdb.Session(&gorm.Session{Logger: gdb.Config.Logger.LogMode(logger.Error)})
-		database.Migrate(migDB)
+		go database.Migrate(migDB)
+		go seeder.InitAllDictData(migDB)
+		listener.Init(i.app)
 	})
 }
 ```
 
-## `app/route/api.go`
+## `app/route/api.go`（user 路由注册）
 
-这个模板故意使用**公开接口**，避免你在第一次搭子系统时被鉴权链路卡住。
+这里直接关注 `user` 的业务路由定义。  
+权限链路由 `admin` 承接，你的子系统不需要自己再实现 `PermissionCheck`；通常只需要像 `user` 一样声明路由与访问级别：
 
 ```go
-package route
+gv1 := engine.Group("/api/v1")
+gv1.Use(middleware2.OperationLog(logService))
 
-import (
-	v1 "bit-labs.cn/my-order/app/handle/v1"
-	"bit-labs.cn/owl"
-	"bit-labs.cn/owl/contract/foundation"
-	"bit-labs.cn/owl/provider/router"
-	"github.com/gin-gonic/gin"
-)
-
-var orderMenu *router.Menu
-
-func InitMenu() []*router.Menu {
-	return []*router.Menu{orderMenu}
-}
-
-func InitApi(app foundation.Application, appName string) {
-	err := app.Invoke(func(
-		engine *gin.Engine,
-		orderHandle *v1.OrderHandle,
-	) {
-		gv1 := engine.Group("/api/v1")
-
-		r := router.NewRouteInfoBuilder(appName, orderHandle, gv1, router.MenuOption{
-			ComponentName: "OrderList",
-			Path:          "/order/index",
-			Icon:          "ep:document",
-		})
-
-		r.Post("/orders", router.AccessPublic, orderHandle.Create).Name("创建订单").Build()
-		r.Get("/orders", router.AccessPublic, orderHandle.Retrieve).Name("订单列表").Build()
-
-		orderMenu = r.GetMenu()
+// user
+{
+	r := router.NewRouteInfoBuilder(appName, userHandle, gv1, router.MenuOption{
+		ComponentName: "SystemUser",
+		Path:          "/system/user/index",
+		Icon:          "ep:user",
 	})
-	owl.PanicIf(err)
+
+	r.Use(middleware.RateLimiter(time.Second*1, 2)).
+		Post("/users/login", router.AccessPublic, userHandle.Login).
+		Name("用户登录").WithoutOperateLog().Build()
+
+	r.Put("/users/me/password", router.AccessAuthenticated, userHandle.ChangePassword).Name("修改我的密码").Build()
+	r.Get("/users/me/menus", router.AccessAuthenticated, userHandle.GetMyMenus).Name("我的菜单").Build()
+	r.Get("/users/me/permissions", router.AccessAuthenticated, userHandle.GetMyPermissions).Name("我的权限").Build()
+	r.Get("/users/me", router.AccessAuthenticated, userHandle.Me).Name("我的信息").Build()
+
+	r.Post("/users", router.AccessAuthorized, userHandle.Create).Name("创建用户").Build()
+	r.Delete("/users/:id", router.AccessAuthorized, userHandle.Delete).Name("删除用户").Build()
+	r.Put("/users/:id", router.AccessAuthorized, userHandle.Update).Name("更新用户").Build()
+	r.Put("/users/:id/status", router.AccessAuthorized, userHandle.ChangeStatus).Name("启用，禁用用户").Build()
+	r.Get("/users", router.AccessAuthorized, userHandle.Retrieve).Name("分页获取用户").Build()
+	r.Get("/users/:id", router.AccessAuthorized, userHandle.Detail).Name("获取用户详情").Build()
+	r.Put("/users/:id/reset", router.AccessSuperAdmin, userHandle.ResetPassword).Name("重置用户密码").Build()
+	r.Put("/users/:id/avatar", router.AccessAuthorized, userHandle.ChangeAvatar).Name("修改用户头像").Build()
+
+	r.Post("/users/:id/roles", router.AccessAuthorized, userHandle.AssignRolesToUser).Name("分配角色给用户").Build()
+	r.Get("/users/:id/roles", router.AccessAuthorized, userHandle.GetRoleIdsByUserId).Name("获取用户角色").Build()
+
+	userMenu = r.GetMenu()
 }
 ```
 
-## `app/model/order.go`
+## `app/model/user.go`（用户聚合模型）
+
+包含用户主表 + 角色/菜单多对多 + 超管构造：
 
 ```go
-package model
-
-import (
-	"bit-labs.cn/owl/provider/db"
-)
-
-const (
-	OrderStatusPending = 1
-	OrderStatusDone    = 2
-)
-
-type Order struct {
+type User struct {
 	db.BaseModel
-	OrderNo string `gorm:"comment:订单号" json:"orderNo"`
-	Title   string `gorm:"comment:标题" json:"title"`
-	Status  int    `gorm:"comment:状态(1待处理,2已完成)" json:"status"`
+	Avatar   string `gorm:"comment:用户头像" json:"avatar"`
+	Username string `gorm:"comment:用户名称;type:string;size:512" json:"username"`
+	Nickname string `gorm:"comment:用户昵称;type:string;size:128" json:"nickname"`
+	Password string `gorm:"comment:用户密码" json:"-"`
+	Remark   string `gorm:"comment:remark" json:"remark"`
+	Phone    string `gorm:"comment:手机;type:string;size:32" json:"phone"`
+	Email    string `gorm:"comment:邮箱" json:"email"`
+	Status   int    `gorm:"comment:状态" json:"status"`
+	Sex      int    `gorm:"comment:性别" json:"sex"`
+	Source   string `gorm:"comment:用户来源" json:"source"`
+	SourceID string `gorm:"comment:第三方用户唯一标识" json:"sourceID"`
+
+	Roles []Role `gorm:"many2many:admin_user_role;joinForeignKey:user_id;References:id;JoinReferences:role_id" json:"roles"`
+	Menus []Menu `gorm:"many2many:admin_user_menu;joinForeignKey:user_id;References:id;JoinReferences:menu_id" json:"menus"`
+
+	Permissions  []string `json:"permissions" gorm:"-"`
+	IsSuperAdmin bool     `json:"isSuperAdmin" gorm:"-"`
 }
 
-func (Order) TableName() string {
-	return "order_order"
+func (i *User) TableName() string { return "admin_user" }
+
+func (i *User) SetPassword(newPassword string) {
+	i.Password = utils.BcryptHash(newPassword)
+}
+
+func NewSuperUser() User {
+	return User{
+		BaseModel:    db.BaseModel{ID: 19941996},
+		Username:     "glen",
+		Nickname:     "超级管理员",
+		IsSuperAdmin: true,
+		Permissions:  []string{"*:*:*"},
+		Roles:        []Role{{Name: "superAdmin"}},
+	}
 }
 ```
 
-## `app/repository/order.go`
+## `app/repository/user.go`（数据持久化）
+
+`user` 仓储除常规查询外，还有 `(username, source)` 唯一性校验和角色关联替换。  
+如果你要补齐一个资源的**增删改查**线路，仓储层至少要提供下面这些接口：
 
 ```go
-package repository
-
-import (
-	"context"
-
-	"bit-labs.cn/my-order/app/model"
-	"bit-labs.cn/owl/contract"
-	"bit-labs.cn/owl/provider/db"
-	"gorm.io/gorm"
-)
-
-type OrderRepositoryInterface interface {
-	Save(order *model.Order) error
-	Retrieve(page, pageSize int, fn func(db *gorm.DB)) (count int64, list []model.Order, err error)
-	contract.WithContext[OrderRepositoryInterface]
+type UserRepositoryInterface interface {
+	FindById(id any) (*model.User, error)
+	Unique(id uint, username string, source string) bool
+	Save(user *model.User) error
+	Delete(ids ...any) error
+	Retrieve(page, pageSize int, fn func(db *gorm.DB)) (count int64, list []model.User, err error)
+	contract.WithContext[UserRepositoryInterface]
 }
 
-type OrderRepository struct {
-	db  *gorm.DB
-	ctx context.Context
-	db.BaseRepository[model.Order]
+func (i *UserRepository) WithContext(ctx context.Context) UserRepositoryInterface {
+	i.db = i.db.WithContext(ctx)
+	i.ctx = ctx
+	return i
 }
 
-func NewOrderRepository(d *gorm.DB) OrderRepositoryInterface {
-	return &OrderRepository{
-		db:             d,
-		BaseRepository: db.NewBaseRepository[model.Order](d),
+func (i *UserRepository) Save(user *model.User) error {
+	err := i.db.Save(&user).Error
+	if err != nil {
+		return err
 	}
+	err = i.db.Model(&user).Association("Roles").Replace(&user.Roles)
+	return err
 }
 
-func (r *OrderRepository) WithContext(ctx context.Context) OrderRepositoryInterface {
-	r.db = r.db.WithContext(ctx)
-	r.ctx = ctx
-	return r
+func (i *UserRepository) Unique(id uint, username string, source string) bool {
+	_, exists := i.BaseRepository.Unique(id, func(db *gorm.DB) {
+		db.Where("username", username).Where("source", source)
+	})
+	return exists
 }
 
-func (r *OrderRepository) Save(order *model.Order) error {
-	return r.BaseRepository.Save(order)
+func (i *UserRepository) FindById(id any) (*model.User, error) {
+	var user model.User
+	err := i.db.Where("id = ?", id).Preload("Roles").First(&user).Error
+	return &user, err
 }
 
-func (r *OrderRepository) Retrieve(page, pageSize int, fn func(db *gorm.DB)) (count int64, list []model.Order, err error) {
-	return r.BaseRepository.Retrieve(page, pageSize, fn)
+func (i *UserRepository) Retrieve(page, pageSize int, fn func(db *gorm.DB)) (count int64, list []model.User, err error) {
+	return i.BaseRepository.Retrieve(page, pageSize, fn)
 }
 ```
 
-## `app/service/order_service.go`
+删除场景直接复用 `BaseRepository.Delete(id)`，通常不需要每个仓储再单独重写一份。
+
+## `app/service/user_service.go`（业务编排）
+
+`user` service 是整条链路最核心的编排层：参数校验、锁、复制、鉴权协作、事件发布。
+
+### 业务错误约定
+
+对“已存在 / 不存在 / 状态不允许 / 重复操作”这类**领域错误**，推荐在 service 包内统一封装业务错误，不要在业务逻辑里直接散落裸 `errors.New(...)`。
+
+示例：
 
 ```go
-package service
-
-import (
-	"context"
-
-	"bit-labs.cn/my-order/app/model"
-	"bit-labs.cn/my-order/app/repository"
-	"bit-labs.cn/owl/provider/db"
-	"bit-labs.cn/owl/provider/router"
-	validatorv10 "github.com/go-playground/validator/v10"
-	"github.com/jinzhu/copier"
-	"gorm.io/gorm"
+const (
+	CodeUserExists   = "USER_EXISTS"
+	CodeUserNotFound = "USER_NOT_FOUND"
 )
 
-type CreateOrderReq struct {
-	OrderNo string `json:"orderNo" validate:"required,min=4,max=32" label:"订单号"`
-	Title   string `json:"title" validate:"required,min=2,max=64" label:"标题"`
-	Status  int    `json:"status" validate:"required,oneof=1 2" label:"状态"`
+func UserExists() *errContract.BizError {
+	return errContract.NewBizError(CodeUserExists, "用户已存在")
 }
 
-type RetrieveOrderReq struct {
-	router.PageReq
-	TitleLike string `json:"title" form:"title" validate:"omitempty,max=64" label:"标题"`
-	Status    int    `json:"status" form:"status" validate:"omitempty,oneof=1 2" label:"状态"`
+func UserNotFound() *errContract.BizError {
+	return errContract.NewBizError(CodeUserNotFound, "用户不存在")
+}
+```
+
+后续 `Create/Update/AssignRoleToUser` 这类写操作里，遇到业务分支应优先返回上述业务错误；数据库、网络、序列化等底层异常再直接返回原始 `error`。
+
+### 关键结构与登录
+
+```go
+type UserService struct {
+	db         *gorm.DB
+	menuManger *router.MenuRepository
+	jwtSvc     *jwt.JWTService
+	db.BaseRepository[model.User]
+	roleSvc   *RoleService
+	enforcer  casbin.IEnforcer
+	userRepo  repository.UserRepositoryInterface
+	eventBus  EventBus.Bus
+	configure *conf.Configure
+	locker    redis.LockerFactory
+	validate  *validatorv10.Validate
 }
 
-type OrderService struct {
-	repo     repository.OrderRepositoryInterface
-	validate *validatorv10.Validate
-	_        *gorm.DB
-}
-
-func NewOrderService(
-	repo repository.OrderRepositoryInterface,
-	tx *gorm.DB,
-	validate *validatorv10.Validate,
-) *OrderService {
-	return &OrderService{repo: repo, validate: validate, _: tx}
-}
-
-func (s *OrderService) CreateOrder(ctx context.Context, req *CreateOrderReq) error {
-	if err := s.validate.Struct(req); err != nil {
-		return err
+func (i *UserService) Login(ctx context.Context, req *LoginReq) (resp *LoginResp, err error) {
+	if err := i.validate.Struct(req); err != nil {
+		return nil, err
 	}
-	var order model.Order
-	if err := copier.Copy(&order, req); err != nil {
-		return err
+	user, err := i.GetUserByName(ctx, req.Username)
+	if err != nil {
+		return nil, err
 	}
-	return s.repo.WithContext(ctx).Save(&order)
+	if ok := utils.BcryptCheck(req.Password, user.Password); !ok {
+		return nil, ErrLogin
+	}
+	token, err := i.jwtSvc.GenerateToken(user)
+	return &LoginResp{User: user, AccessToken: token}, err
 }
+```
 
-func (s *OrderService) RetrieveOrders(ctx context.Context, req *RetrieveOrderReq) (count int64, list []model.Order, err error) {
-	if err := s.validate.Struct(req); err != nil {
+### 增删改查（锁 + 唯一性 + copier）
+
+```go
+func (i *UserService) RetrieveUsers(ctx context.Context, req *RetrieveUserReq) (count int, list []model.User, err error) {
+	if err = i.validate.Struct(req); err != nil {
 		return 0, nil, err
 	}
-	return s.repo.WithContext(ctx).Retrieve(req.Page, req.PageSize, func(tx *gorm.DB) {
+
+	c, u, e := i.userRepo.WithContext(ctx).Retrieve(req.Page, req.PageSize, func(tx *gorm.DB) {
 		db.AppendWhereFromStruct(tx, req)
+		tx.Preload("Roles")
 		tx.Order("created_at desc")
 	})
+	return cast.ToInt(c), u, e
+}
+
+func (i *UserService) CreateUser(ctx context.Context, req *CreateUserReq) error {
+	if err := i.validate.Struct(req); err != nil {
+		return err
+	}
+	l := i.locker.New()
+	if err := l.Lock("user:create"); err != nil {
+		return err
+	}
+	defer l.Unlock()
+
+	if i.userRepo.WithContext(ctx).Unique(0, req.Username, req.Source) {
+		return UserExists()
+	}
+
+	var user model.User
+	if err := copier.Copy(&user, req); err != nil {
+		return err
+	}
+	user.SetPassword(req.Password)
+	return i.userRepo.WithContext(ctx).Save(&user)
+}
+
+func (i *UserService) UpdateUser(ctx context.Context, req *UpdateUserReq) error {
+	if err := i.validate.Struct(req); err != nil {
+		return err
+	}
+	l := i.locker.New()
+	if err := l.Lock("user:update:" + cast.ToString(req.ID)); err != nil {
+		return err
+	}
+	defer l.Unlock()
+
+	if i.userRepo.WithContext(ctx).Unique(req.ID, req.Username, req.Source) {
+		return UserExists()
+	}
+	user, err := i.userRepo.WithContext(ctx).FindById(req.ID)
+	if err != nil {
+		return err
+	}
+	if err = copier.Copy(&user, req); err != nil {
+		return err
+	}
+	return i.userRepo.WithContext(ctx).Save(user)
+}
+
+func (i *UserService) DeleteUser(ctx context.Context, id uint) error {
+	l := i.locker.New()
+	if err := l.Lock("user:delete:" + cast.ToString(id)); err != nil {
+		return err
+	}
+	defer l.Unlock()
+
+	return i.BaseRepository.Delete(id)
 }
 ```
 
-## `app/handle/v1/order_handle.go`
+如果你的模块需要详情接口，通常做法也是在 service 里先调 `repo.WithContext(ctx).FindById(id)`，必要时把 `gorm.ErrRecordNotFound` 转成业务错误，再返回给 handle。
+
+### 分配角色（发布事件同步 casbin 分组策略）
 
 ```go
-package v1
+func (i *UserService) AssignRoleToUser(ctx context.Context, req *AssignRoleToUser) error {
+	if err := i.validate.Struct(req); err != nil {
+		return err
+	}
+	l := i.locker.New()
+	if err := l.Lock("user:assign-roles:" + cast.ToString(req.UserID)); err != nil {
+		return err
+	}
+	defer l.Unlock()
 
-import (
-	"bit-labs.cn/my-order/app/service"
-	"bit-labs.cn/owl/provider/router"
-	"github.com/gin-gonic/gin"
-)
-
-type OrderHandle struct {
-	svc *service.OrderService
+	roles := db.GetModelsByIDs[model.Role](req.RoleIDs)
+	user, err := i.userRepo.WithContext(ctx).FindById(req.UserID)
+	if err != nil {
+		return err
+	}
+	user.SetRoles(roles)
+	err = i.userRepo.WithContext(ctx).Save(user)
+	i.eventBus.Publish(event.AssignRoleToUser, req)
+	return err
 }
+```
 
-func NewOrderHandle(svc *service.OrderService) *OrderHandle {
-	return &OrderHandle{svc: svc}
-}
+## `app/handle/v1/user_handle.go`（HTTP 入口）
 
-func (h *OrderHandle) ModuleName() (string, string) { return "order", "订单管理" }
+handle 只做绑定参数、调 service、返回统一响应。下面这组就是 `user` 模块里最典型的 CRUD 入口：
 
-func (h *OrderHandle) Create(ctx *gin.Context) {
-	var req service.CreateOrderReq
+```go
+func (i *UserHandle) Create(ctx *gin.Context) {
+	req := new(service.CreateUserReq)
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		router.Fail(ctx, err)
 		return
 	}
-	if err := h.svc.CreateOrder(ctx.Request.Context(), &req); err != nil {
+	if err := i.userSvc.CreateUser(ctx.Request.Context(), req); err != nil {
 		router.Fail(ctx, err)
 		return
 	}
 	router.Success(ctx, nil)
 }
 
-func (h *OrderHandle) Retrieve(ctx *gin.Context) {
-	var req service.RetrieveOrderReq
-	if err := ctx.ShouldBindQuery(&req); err != nil {
-		router.BadRequest(ctx, "参数绑定失败")
-		return
-	}
-	count, list, err := h.svc.RetrieveOrders(ctx.Request.Context(), &req)
+func (i *UserHandle) Delete(ctx *gin.Context) {
+	id := cast.ToUint(ctx.Param("id"))
+	err := i.userSvc.DeleteUser(ctx.Request.Context(), id)
 	if err != nil {
 		router.Fail(ctx, err)
 		return
 	}
-	router.PageSuccess(ctx, int(count), req.Page, req.PageSize, list)
+	router.Success(ctx, nil)
+}
+
+func (i *UserHandle) Update(ctx *gin.Context) {
+	req := new(service.UpdateUserReq)
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		router.Fail(ctx, err)
+		return
+	}
+	req.ID = cast.ToUint(ctx.Param("id"))
+	err := i.userSvc.UpdateUser(ctx.Request.Context(), req)
+	if err != nil {
+		router.Fail(ctx, err)
+		return
+	}
+	router.Success(ctx, nil)
+}
+
+func (i *UserHandle) Retrieve(ctx *gin.Context) {
+	var req service.RetrieveUserReq
+	if err := ctx.ShouldBindQuery(&req); err != nil {
+		router.BadRequest(ctx, "参数绑定失败")
+		return
+	}
+	count, list, err := i.userSvc.RetrieveUsers(ctx.Request.Context(), &req)
+	if err != nil {
+		router.Fail(ctx, err)
+		return
+	}
+	router.PageSuccess(ctx, count, req.Page, req.PageSize, list)
 }
 ```
 
-## `app/database/auto_migrate_gen.go`
+`user` 当前示例里 `Detail()` 还是空实现，因此本文重点展示可直接复用的 Create / Delete / Update / Retrieve 四条主链路。
+
+## `app/event/assign_role_to_user.go` + `app/listener/listener.go`
+
+即使你的业务子系统不自己实现权限中间件，`user` 这段事件链路依然值得参考：它展示了“service 发布事件，listener 做后置同步”的写法。  
+在 `admin` 本体里，这个事件用于把“用户-角色关系”同步到 casbin grouping policy：
 
 ```go
-package database
-
-import (
-	"bit-labs.cn/my-order/app/model"
-	"gorm.io/gorm"
+const (
+	AssignRoleToUser = "assign_role_to_user"
 )
+```
 
+```go
+bus.Subscribe(event.AssignRoleToUser, func(req *service.AssignRoleToUser) {
+	userID := cast.ToString(req.UserID)
+	var rules [][]string
+	for _, roleID := range req.RoleIDs {
+		rules = append(rules, []string{userID, roleID})
+	}
+	_, err := enforcer.RemoveFilteredGroupingPolicy(0, userID)
+	log.Error(err)
+	_, err = enforcer.AddGroupingPolicies(rules)
+	log.Error(err)
+})
+```
+
+## `app/database/auto_migrate_gen.go`（迁移）
+
+确保 `User` 与 `UserMenu` 已在迁移列表中：
+
+```go
 func Migrate(db *gorm.DB) {
 	_ = db.Migrator().AutoMigrate(
-		&model.Order{},
+		// ... 省略其他模型
+		&User{},
+		&UserMenu{},
 	)
 }
 ```
 
-## 首次启动最小配置
+## 启动与验证（owl-admin 场景）
 
-### `conf/database.yaml`
+本示例基于现有 `owl-admin` 工程，不需要独立 `go.mod/main.go`。  
+启动与验收请按以下文档执行：
 
-建议第一次用 sqlite，最容易跑通：
+- `owl-admin/docs/08-startup-and-verification.md`
+- `owl-admin/docs/05-create-new-module-playbook.md`
 
-```yaml
-driver: sqlite
-host: my-order.db
-database: main
-```
+建议最少验收以下接口：
 
-说明：
-
-- `DBServiceProvider` 遇到 sqlite 时会把 `host` 拼到 `conf/` 目录下，所以最终数据库文件通常是 `conf/my-order.db`。
-- 如果继续使用 pgsql/mysql，则按默认模板补齐连接信息即可。
-
-### `conf/router.yaml`
-
-默认模板通常已够用，确认端口即可：
-
-```yaml
-server:
-  host: "0.0.0.0"
-  port: 8080
-```
-
-## 这个模板跑通后再怎么扩展
-
-1. 需要登录与权限：给路由分组挂权限中间件，并在 `ServiceProviders()` 中增加 `permission` 与自定义 `jwt` Provider。
-2. 需要分布式锁：增加 `redis.RedisServiceProvider`，在 service 中注入 `redis.LockerFactory`。
-3. 需要文件上传：增加 `storage.StorageServiceProvider`，并注册 `storage.NewFileHandle`。
-4. 需要命令行：在 `Commands()` 返回 cobra 命令，或者用 `ConsoleShell()` 启动。
+- `POST /api/v1/users/login`
+- `GET /api/v1/users/me`
+- `GET /api/v1/users/me/menus`
+- `GET /api/v1/users`
+- `POST /api/v1/users/:id/roles`
 
 ## 完成定义
 
-- 按本文复制文件后，能在新仓库里启动一个最小公开 CRUD 子系统。
-- 启动后至少能访问 `POST /api/v1/orders` 与 `GET /api/v1/orders`。
-- 后续只需在此基础上叠加鉴权、缓存、上传等能力，而不是重新猜项目骨架。
+- 文档中的示例代码已从 `order` 最小公开模板切换为 `owl-admin user` 完整链路。
+- 文档读者可以按“层次 + 接线点”理解 `user` 模块，而不是只看到最小 CRUD。
+- 文档已去掉“子系统需要自己实现鉴权中间件”的暗示，改为明确复用 `owl/admin` 的上层能力。
+- 文档不再使用“独立子系统最小模板/公开 CRUD”作为主叙事，避免和 `owl-admin` 实际架构冲突。

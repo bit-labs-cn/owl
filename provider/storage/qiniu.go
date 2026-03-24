@@ -14,96 +14,146 @@ import (
 
 	"github.com/qiniu/go-sdk/v7/auth/qbox"
 	"github.com/qiniu/go-sdk/v7/storage"
+	"github.com/qiniu/go-sdk/v7/storagev2/credentials"
+	httpclient "github.com/qiniu/go-sdk/v7/storagev2/http_client"
+	"github.com/qiniu/go-sdk/v7/storagev2/region"
+	"github.com/qiniu/go-sdk/v7/storagev2/uploader"
+	"github.com/qiniu/go-sdk/v7/storagev2/uptoken"
 )
 
-// QiniuStorage 七牛云存储实现
+// QiniuStorage 七牛云存储实现（上传走 storagev2；列举/元数据/删除等走 v1 BucketManager，避免 storagev2/objects 在部分 Go 版本下无法编译）
 type QiniuStorage struct {
-	mac           *qbox.Mac
+	credProv      credentials.CredentialsProvider
 	config        *QiniuConfig
+	regions       region.RegionsProvider
+	uploadManager *uploader.UploadManager
+	mac           *qbox.Mac
 	bucketManager *storage.BucketManager
-	uploader      *storage.FormUploader
-	cfg           *storage.Config
+}
+
+type qiniuStaticCreds struct{ v *credentials.Credentials }
+
+func (q qiniuStaticCreds) Get(ctx context.Context) (*credentials.Credentials, error) {
+	return q.v, nil
+}
+
+func qiniuRegionsProvider(zone string, useHTTPS bool) region.RegionsProvider {
+	z := strings.TrimSpace(zone)
+	var id string
+	switch z {
+	case "", "z0", "华东":
+		id = "z0"
+	case "z1", "华北":
+		id = "z1"
+	case "z2", "华南":
+		id = "z2"
+	case "na0", "北美":
+		id = "na0"
+	case "as0", "新加坡":
+		id = "as0"
+	case "华东浙江2区", "cn-east-2":
+		id = "cn-east-2"
+	default:
+		if z != "" {
+			id = z
+		} else {
+			id = "z0"
+		}
+	}
+	return region.GetRegionByID(id, useHTTPS)
+}
+
+func qiniuV1Zone(zone string) *storage.Zone {
+	if zone == "" {
+		return &storage.ZoneHuadong
+	}
+	switch zone {
+	case "z0", "华东":
+		return &storage.ZoneHuadong
+	case "z1", "华北":
+		return &storage.ZoneHuabei
+	case "z2", "华南":
+		return &storage.ZoneHuanan
+	case "na0", "北美":
+		return &storage.ZoneBeimei
+	case "as0", "新加坡":
+		return &storage.ZoneXinjiapo
+	case "华东浙江2区", "cn-east-2":
+		return &storage.ZoneHuadongZheJiang2
+	default:
+		return &storage.ZoneHuadong
+	}
+}
+
+type qiniuUploadRet struct {
+	Hash string `json:"hash"`
 }
 
 // NewQiniuStorage 创建七牛云存储实例
 func NewQiniuStorage(config *QiniuConfig) (*QiniuStorage, error) {
-	// 创建认证对象
 	mac := qbox.NewMac(config.AccessKey, config.SecretKey)
+	cred := credentials.NewCredentials(config.AccessKey, config.SecretKey)
+	credProv := qiniuStaticCreds{v: cred}
+	useHTTPS := config.UseSSL
+	reg := qiniuRegionsProvider(config.Zone, useHTTPS)
 
-	// 创建配置对象
+	httpOpts := httpclient.Options{
+		Credentials:         credProv,
+		UseInsecureProtocol: !useHTTPS,
+		Regions:             reg,
+	}
+
 	cfg := &storage.Config{
 		UseHTTPS:      config.UseSSL,
 		UseCdnDomains: false,
+		Zone:          qiniuV1Zone(strings.TrimSpace(config.Zone)),
 	}
-
-	// 设置区域
-	if config.Zone != "" {
-		switch config.Zone {
-		case "z0", "华东":
-			cfg.Zone = &storage.ZoneHuadong
-		case "z1", "华北":
-			cfg.Zone = &storage.ZoneHuabei
-		case "z2", "华南":
-			cfg.Zone = &storage.ZoneHuanan
-		case "na0", "北美":
-			cfg.Zone = &storage.ZoneBeimei
-		case "as0", "新加坡":
-			cfg.Zone = &storage.ZoneXinjiapo
-		case "华东浙江2区":
-			cfg.Zone = &storage.ZoneHuadongZheJiang2
-		default:
-			cfg.Zone = &storage.ZoneHuadong // 默认华东
-		}
-	} else {
-		cfg.Zone = &storage.ZoneHuadong // 默认华东
-	}
-
-	// 创建存储桶管理器
-	bucketManager := storage.NewBucketManager(mac, cfg)
-
-	// 创建上传器
-	uploader := storage.NewFormUploader(cfg)
 
 	return &QiniuStorage{
+		credProv: credProv,
+		config:   config,
+		regions:  reg,
+		uploadManager: uploader.NewUploadManager(&uploader.UploadManagerOptions{
+			Options: httpOpts,
+		}),
 		mac:           mac,
-		config:        config,
-		bucketManager: bucketManager,
-		uploader:      uploader,
-		cfg:           cfg,
+		bucketManager: storage.NewBucketManager(mac, cfg),
 	}, nil
 }
 
 // Put 上传文件
-func (q *QiniuStorage) Put(ctx context.Context, path string, reader io.Reader, size int64) (*FileInfo, error) {
+func (q *QiniuStorage) Put(ctx context.Context, path string, reader io.Reader, _ int64) (*FileInfo, error) {
 	key := q.buildPath(path)
 
-	// 读取数据并计算 MD5
 	buf := new(bytes.Buffer)
 	hash := md5.New()
 	tee := io.TeeReader(reader, hash)
 
-	_, err := buf.ReadFrom(tee)
-	if err != nil {
+	if _, err := buf.ReadFrom(tee); err != nil {
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
-	// 生成上传凭证
-	putPolicy := storage.PutPolicy{
-		Scope: q.config.Bucket,
+	putPolicy, err := uptoken.NewPutPolicy(q.config.Bucket, time.Now().Add(time.Hour))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build put policy: %w", err)
 	}
-	upToken := putPolicy.UploadToken(q.mac)
 
-	// 上传文件
-	ret := storage.PutRet{}
-	putExtra := storage.PutExtra{}
-
-	err = q.uploader.Put(ctx, &ret, upToken, key, bytes.NewReader(buf.Bytes()), int64(buf.Len()), &putExtra)
+	objectName := key
+	fileName := filepath.Base(path)
+	var ret qiniuUploadRet
+	err = q.uploadManager.UploadReader(ctx, bytes.NewReader(buf.Bytes()), &uploader.ObjectOptions{
+		BucketName:      q.config.Bucket,
+		ObjectName:      &objectName,
+		FileName:        fileName,
+		ContentType:     MimeType(path),
+		RegionsProvider: q.regions,
+		UpToken:         uptoken.NewSigner(putPolicy, q.credProv),
+	}, &ret)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload file: %w", err)
 	}
 
-	// 构建文件信息
-	fileInfo := &FileInfo{
+	return &FileInfo{
 		Name:        filepath.Base(path),
 		Path:        path,
 		Size:        int64(buf.Len()),
@@ -117,9 +167,7 @@ func (q *QiniuStorage) Put(ctx context.Context, path string, reader io.Reader, s
 			"key":    key,
 			"hash":   ret.Hash,
 		},
-	}
-
-	return fileInfo, nil
+	}, nil
 }
 
 // PutFile 上传本地文件
@@ -143,15 +191,12 @@ func (q *QiniuStorage) Get(ctx context.Context, path string) (io.ReadCloser, err
 	key := q.buildPath(path)
 	url := q.buildURL(key)
 
-	// 创建 HTTP 请求
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// 发送请求
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file: %w", err)
 	}
@@ -167,41 +212,34 @@ func (q *QiniuStorage) Get(ctx context.Context, path string) (io.ReadCloser, err
 // Delete 删除文件
 func (q *QiniuStorage) Delete(ctx context.Context, path string) error {
 	key := q.buildPath(path)
-
 	err := q.bucketManager.Delete(q.config.Bucket, key)
 	if err != nil {
 		return fmt.Errorf("failed to delete file: %w", err)
 	}
-
 	return nil
 }
 
 // Exists 检查文件是否存在
 func (q *QiniuStorage) Exists(ctx context.Context, path string) (bool, error) {
 	key := q.buildPath(path)
-
 	_, err := q.bucketManager.Stat(q.config.Bucket, key)
 	if err != nil {
-		// 检查是否是文件不存在的错误
 		if strings.Contains(err.Error(), "no such file or directory") ||
-			strings.Contains(err.Error(), "612") { // 七牛云文件不存在错误码
+			strings.Contains(err.Error(), "612") {
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to check file existence: %w", err)
 	}
-
 	return true, nil
 }
 
 // Size 获取文件大小
 func (q *QiniuStorage) Size(ctx context.Context, path string) (int64, error) {
 	key := q.buildPath(path)
-
 	fileInfo, err := q.bucketManager.Stat(q.config.Bucket, key)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get file size: %w", err)
 	}
-
 	return fileInfo.Fsize, nil
 }
 
@@ -226,13 +264,12 @@ func (q *QiniuStorage) List(ctx context.Context, prefix string) ([]*FileInfo, er
 		}
 
 		for _, entry := range entries {
-			// 移除前缀，获取相对路径
 			relativePath := strings.TrimPrefix(entry.Key, keyPrefix)
 			if relativePath == "" {
 				relativePath = entry.Key
 			}
 
-			fileInfo := &FileInfo{
+			files = append(files, &FileInfo{
 				Name:        filepath.Base(entry.Key),
 				Path:        relativePath,
 				Size:        entry.Fsize,
@@ -240,7 +277,7 @@ func (q *QiniuStorage) List(ctx context.Context, prefix string) ([]*FileInfo, er
 				Extension:   filepath.Ext(entry.Key),
 				URL:         q.buildURL(entry.Key),
 				Hash:        entry.Hash,
-				UploadTime:  time.Unix(entry.PutTime/10000000, 0), // 七牛云时间戳是纳秒级别
+				UploadTime:  time.Unix(entry.PutTime/10000000, 0),
 				Metadata: map[string]string{
 					"bucket":    q.config.Bucket,
 					"key":       entry.Key,
@@ -248,9 +285,7 @@ func (q *QiniuStorage) List(ctx context.Context, prefix string) ([]*FileInfo, er
 					"mime_type": entry.MimeType,
 					"end_user":  entry.EndUser,
 				},
-			}
-
-			files = append(files, fileInfo)
+			})
 		}
 
 		if !hasNext {
@@ -266,12 +301,10 @@ func (q *QiniuStorage) List(ctx context.Context, prefix string) ([]*FileInfo, er
 func (q *QiniuStorage) Copy(ctx context.Context, srcPath, dstPath string) error {
 	srcKey := q.buildPath(srcPath)
 	dstKey := q.buildPath(dstPath)
-
 	err := q.bucketManager.Copy(q.config.Bucket, srcKey, q.config.Bucket, dstKey, true)
 	if err != nil {
 		return fmt.Errorf("failed to copy file: %w", err)
 	}
-
 	return nil
 }
 
@@ -279,18 +312,15 @@ func (q *QiniuStorage) Copy(ctx context.Context, srcPath, dstPath string) error 
 func (q *QiniuStorage) Move(ctx context.Context, srcPath, dstPath string) error {
 	srcKey := q.buildPath(srcPath)
 	dstKey := q.buildPath(dstPath)
-
 	err := q.bucketManager.Move(q.config.Bucket, srcKey, q.config.Bucket, dstKey, true)
 	if err != nil {
 		return fmt.Errorf("failed to move file: %w", err)
 	}
-
 	return nil
 }
 
 // buildPath 构建对象路径
 func (q *QiniuStorage) buildPath(path string) string {
-	// 清理路径
 	path = strings.TrimPrefix(path, "/")
 
 	dateFormat := strings.TrimSpace(q.config.DateFormat)
