@@ -186,15 +186,14 @@ func iteratorMenuSetShowLink(menu *Menu, ids ...string) bool {
 			break
 		}
 	}
-	var childShow bool
 	for _, v := range menu.Children {
 
 		x := iteratorMenuSetShowLink(v, ids...) // ↑
 		if x {
-			childShow = true // 只要有一个子节点显示，则当前节点也显示
 			show = true
 		}
 	}
-	menu.Meta.ShowLink = childShow
+	// 当前节点自身命中或任一子节点命中，都应显示
+	menu.Meta.ShowLink = show
 	return show
 }
