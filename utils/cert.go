@@ -18,6 +18,43 @@ import (
 	jsoniter "github.com/json-iterator/go"
 )
 
+// GenRSAKeyPair 生成 RSA 公私钥（PEM 格式字符串）。
+// 私钥使用 PKCS8 编码，公钥使用 PKIX 编码，和当前签名/验签逻辑保持一致。
+func GenRSAKeyPair(bits int) (privateKeyPEM string, publicKeyPEM string, err error) {
+	if bits < 2048 {
+		return "", "", errors.New("RSA 位数不能小于 2048")
+	}
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		return "", "", err
+	}
+
+	privateDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return "", "", err
+	}
+
+	privateBlock := &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: privateDER,
+	}
+	privateKeyPEM = string(pem.EncodeToMemory(privateBlock))
+
+	publicDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return "", "", err
+	}
+
+	publicBlock := &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: publicDER,
+	}
+	publicKeyPEM = string(pem.EncodeToMemory(publicBlock))
+
+	return privateKeyPEM, publicKeyPEM, nil
+}
+
 type LicensePayload struct {
 	Version   string    `json:"version"`
 	LicenseID string    `json:"licenseID"`
