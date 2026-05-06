@@ -62,6 +62,8 @@ func GetAllRoutes() []RouterInfo {
 type Dep struct {
 	Handler Handler
 	Method  gin.HandlerFunc
+	// AppName 依赖接口所属子应用名（如 admin）；为空时使用当前 RouterInfoBuilder 的 appName。
+	AppName string
 }
 type RouterInfoBuilder struct {
 	menu     *Menu
@@ -140,7 +142,11 @@ func (i *RouterInfoBuilder) Build() {
 	for _, dep := range i.deps {
 		funcName := nameOfFunction(dep.Method)
 		en, _ := dep.Handler.ModuleName()
-		permission := i.appName + ":" + en + ":" + funcName
+		depAppName := strings.TrimSpace(dep.AppName)
+		if dep.AppName == "" {
+			depAppName = i.appName
+		}
+		permission := depAppName + ":" + en + ":" + funcName
 		permissions = append(permissions, permission)
 	}
 	i.deps = nil // 清理依赖
