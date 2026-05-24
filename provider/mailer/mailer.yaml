@@ -1,0 +1,12 @@
+# 邮件发送配置
+default: smtp
+
+smtp:
+  host: smtp.example.com
+  port: 587
+  username: ""
+  password: ""
+  from: "noreply@example.com"
+  from-name: "Owl App"
+  tls: true
+  starttls: true
