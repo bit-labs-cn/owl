@@ -40,6 +40,10 @@ func (d *SMTPDriver) Send(ctx context.Context, msg *mailerContract.Message) erro
 		return fmt.Errorf("mailer: from address is required")
 	}
 
+	if msg.FromName == "" {
+		msg.FromName = d.cfg.FromName
+	}
+
 	body, err := buildMessageBody(d.cfg, from, msg)
 	if err != nil {
 		return err
