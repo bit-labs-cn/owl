@@ -15,10 +15,12 @@ const (
 
 // Meta 菜单 meta 信息，用于前端显示， 需要参考 pure-admin 的文档，菜单是对 pure-admin 进行适配
 type Meta struct {
-	Title      string `json:"title"`      // 菜单标题
-	Icon       string `json:"icon"`       // 菜单图标
-	ShowLink   bool   `json:"showLink"`   // 是否显示菜单
-	ShowParent bool   `json:"showParent"` // 是否显示父级菜单
+	Title      string `json:"title"`              // 菜单标题
+	Icon       string `json:"icon"`               // 菜单图标
+	ShowLink   bool   `json:"showLink"`           // 是否显示菜单
+	ShowParent bool   `json:"showParent"`         // 是否显示父级菜单
+	NoLayout   bool   `json:"noLayout,omitempty"` // 是否跳过根布局（全屏独立页）
+	Target     string `json:"target,omitempty"`   // 菜单打开目标（如 _blank 新标签页）
 }
 
 type Menu struct {
