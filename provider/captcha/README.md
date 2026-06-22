@@ -23,9 +23,7 @@ enabled: true
 ttl: 300
 type: "click"
 mode: "text"
-padding: 5
 store: "memory" # memory redis
-cleanup-interval: 60
 ```
 
 

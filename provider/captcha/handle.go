@@ -5,6 +5,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// @Summary		获取验证码配置
+// @Description	返回 captcha.yaml 中的 enabled、type、mode
+// @Tags			验证码
+// @Produce		json
+// @Success		200	{object}	router.Resp{data=ConfigResp}	"操作成功"
+// @Router			/captcha/config [GET]
+func (s *Service) handleConfig(ctx *gin.Context) {
+	router.Success(ctx, s.Config())
+}
+
 // @Summary		生成验证码
 // @Description	根据类型生成验证码
 // @Tags			验证码

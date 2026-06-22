@@ -20,6 +20,13 @@ import (
 	"github.com/wenlng/go-captcha/v2/slide"
 )
 
+const (
+	// 坐标/角度校验容差（像素或度），与 go-captcha 默认推荐一致
+	defaultValidatePadding = 5
+	// 内存存储过期记录清理间隔
+	defaultCleanupInterval = 60 * time.Second
+)
+
 type ClickCaptchaResp struct {
 	CaptchaId   string `json:"captchaId"`   // 验证码ID
 	MasterImage string `json:"masterImage"` // 主图Base64
@@ -42,13 +49,11 @@ type RotateCaptchaResp struct {
 }
 
 type Options struct {
-	Enabled         bool   `json:"enabled"`          // 是否启用
-	TTL             int    `json:"ttl"`              // 过期时间(秒)
-	Type            string `json:"type"`             // 默认验证码类型
-	Mode            string `json:"mode"`             // 默认生成模式
-	Padding         int    `json:"padding"`          // 校验容差
-	Store           string `json:"store"`            // 存储驱动(memory|redis)
-	CleanupInterval int    `json:"cleanup-interval"` // 清理间隔(秒)
+	Enabled bool   `json:"enabled"` // 是否启用
+	TTL     int    `json:"ttl"`     // 过期时间(秒)
+	Type    string `json:"type"`    // 默认验证码类型
+	Mode    string `json:"mode"`    // 默认生成模式
+	Store   string `json:"store"`   // 存储驱动(memory|redis)
 }
 
 type Service struct {
@@ -96,18 +101,50 @@ type GenerateReq struct {
 	Type string `json:"type"` // 验证码类型
 }
 
-// Generate 生成指定类型的验证码
+// Generate 生成指定类型的验证码（type 为空时使用配置 captcha.yaml 的 type；mode 始终来自配置）
 func (s *Service) Generate(ctx context.Context, typ string) (interface{}, error) {
 	resolved := s.resolveType(typ)
+	mode := s.resolveMode("")
 	switch resolved {
 	case "click":
-		return s.GenerateClick(ctx, s.resolveMode(typ))
+		return s.GenerateClick(ctx, mode)
 	case "slide":
-		return s.GenerateSlide(ctx, s.resolveMode(typ))
+		return s.GenerateSlide(ctx, mode)
 	case "rotate":
 		return s.GenerateRotate(ctx)
 	default:
 		return nil, errors.New("不支持的验证码类型")
+	}
+}
+
+// ConfigResp 对外暴露的验证码配置
+type ConfigResp struct {
+	Enabled bool   `json:"enabled"`
+	Type    string `json:"type"`
+	Mode    string `json:"mode"`
+}
+
+// Enabled 是否启用验证码
+func (s *Service) Enabled() bool {
+	return s.opt.Enabled
+}
+
+// DefaultType 默认验证码类型（来自 captcha.yaml）
+func (s *Service) DefaultType() string {
+	return s.resolveType("")
+}
+
+// DefaultMode 默认验证码模式（来自 captcha.yaml）
+func (s *Service) DefaultMode() string {
+	return s.resolveMode("")
+}
+
+// Config 返回当前验证码配置
+func (s *Service) Config() ConfigResp {
+	return ConfigResp{
+		Enabled: s.opt.Enabled,
+		Type:    s.DefaultType(),
+		Mode:    s.DefaultMode(),
 	}
 }
 
@@ -126,7 +163,7 @@ type VerifyReq struct {
 	Angle     int          `json:"angle"`     // 旋转角度
 }
 
-// Verify 校验验证码
+// Verify 校验验证码（type 为空时使用配置 captcha.yaml 的 type）
 func (s *Service) Verify(ctx context.Context, req *VerifyReq) (bool, error) {
 	resolved := s.resolveType(req.Type)
 	switch resolved {
@@ -213,7 +250,8 @@ func (s *Service) GenerateSlide(ctx context.Context, mode string) (*SlideCaptcha
 
 	block := data.GetData()
 	id := uuid.NewString()
-	record := cache_captcha.CaptchaRecord{Type: "slide", SlideDX: block.DX, SlideDY: block.DY}
+	// 滑块模式校验目标为缺口坐标 block.X/Y，而非拼图起始位置 DX/DY
+	record := cache_captcha.CaptchaRecord{Type: "slide", SlideDX: block.X, SlideDY: block.Y}
 	if err := s.store(ctx, id, &record); err != nil {
 		return nil, err
 	}
@@ -222,7 +260,7 @@ func (s *Service) GenerateSlide(ctx context.Context, mode string) (*SlideCaptcha
 		CaptchaId:   id,
 		MasterImage: master,
 		TileImage:   tile,
-		TileY:       block.DY,
+		TileY:       block.Y,
 		TileWidth:   block.Width,
 		TileHeight:  block.Height,
 	}, nil
@@ -292,7 +330,7 @@ func (s *Service) VerifyClick(ctx context.Context, req *VerifyClickReq) (bool, e
 		if !ok {
 			return false, nil
 		}
-		if !click.Validate(p.X, p.Y, dot.X, dot.Y, dot.Width, dot.Height, s.opt.Padding) {
+		if !click.Validate(p.X, p.Y, dot.X, dot.Y, dot.Width, dot.Height, defaultValidatePadding) {
 			return false, nil
 		}
 	}
@@ -321,7 +359,7 @@ func (s *Service) VerifySlide(ctx context.Context, req *VerifySlideReq) (bool, e
 	if record.Type != "slide" {
 		return false, nil
 	}
-	if !slide.Validate(req.X, req.Y, record.SlideDX, record.SlideDY, s.opt.Padding) {
+	if !slide.Validate(req.X, req.Y, record.SlideDX, record.SlideDY, defaultValidatePadding) {
 		return false, nil
 	}
 	_ = s.remove(ctx, req.CaptchaId)
@@ -348,7 +386,7 @@ func (s *Service) VerifyRotate(ctx context.Context, req *VerifyRotateReq) (bool,
 	if record.Type != "rotate" {
 		return false, nil
 	}
-	if !rotate.Validate(req.Angle, record.RotateAngle, s.opt.Padding) {
+	if !rotate.Validate(req.Angle, record.RotateAngle, defaultValidatePadding) {
 		return false, nil
 	}
 	_ = s.remove(ctx, req.CaptchaId)

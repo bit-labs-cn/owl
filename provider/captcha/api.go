@@ -9,6 +9,7 @@ func (s *Service) RegisterRoutes(engine *gin.Engine) {
 	}
 
 	group := engine.Group("/api/v1/captcha")
+	group.GET("/config", s.handleConfig)
 	group.POST("/generate", s.handleGenerate)
 	group.POST("/verify", s.handleVerify)
 }

@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"errors"
 	"strings"
-	"time"
 
 	"bit-labs.cn/owl"
 	"bit-labs.cn/owl/contract/foundation"
@@ -73,6 +72,6 @@ func newStore(opt Options, client redis.UniversalClient) (cache_captcha.CaptchaS
 		}
 		return cache_captcha.NewRedisStore(client), nil
 	}
-	interval := time.Duration(opt.CleanupInterval) * time.Second
+	interval := defaultCleanupInterval
 	return cache_captcha.NewMemoryStore(interval), nil
 }
