@@ -58,7 +58,7 @@ owl.NewApp().ConsoleShell(rootCmd)
    `registerServiceProviders(i.serviceProviders...)`：对每个 Provider 执行 `injectAppInstance`、`Register()`，并根据 `Conf()` 生成缺失的配置文件。
 
 5. **按模式执行子应用**  
-   - **非命令行**：对每个 SubApp 依次 `RegisterRouters()`、收集 `Menu()`、`Bootstrap()`；然后将所有菜单 `AddMenu(i.menus...)`。
+   - **非命令行**：先对每个 SubApp 依次 `RegisterRouters()`、收集 `Menu()`，再 `AddMenu(i.menus...)`，最后对每个 SubApp 执行 `Bootstrap()`。
    - **命令行**：对每个 SubApp 只执行 `Bootstrap()`。
 
 6. **执行所有 Provider 的 Boot()**  

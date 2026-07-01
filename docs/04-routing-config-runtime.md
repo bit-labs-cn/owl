@@ -18,9 +18,28 @@ type Handler interface {
 
 ## 菜单
 
-- 每个子应用通过 `Menu()` 返回 `[]*router.Menu`，框架在 WebShell 下收集后调用 `menuManager.AddMenu(i.menus...)`。  
+- 每个子应用通过 `Menu()` 返回 `[]*router.Menu`，框架在 WebShell 下收集后调用 `menuManager.AddMenu(i.menus...)`，再执行各 SubApp 的 `Bootstrap()`。  
 - 单模块的菜单可由 `RouterInfoBuilder` 的 `MenuOption` 与 `GetMenu()` 得到，再在子应用内组装成树并在 `Menu()` 中返回。  
 - 菜单结构见 `provider/router/menu.go`（`Menu`、`Meta`、`MenuType` 等）。
+
+### 宿主定制菜单 Meta
+
+框架在 `AddMenu` 之后执行各 SubApp 的 `Bootstrap()`，因此宿主可在 `Bootstrap()` 中注入 `*router.MenuRepository`，按路由 **Name**（不是 path）修改已注册菜单的 Meta：
+
+```go
+func (i *SubAppHost) Bootstrap() {
+    _ = i.app.Invoke(func(menuRepo *router.MenuRepository) {
+        menuRepo.ChangeName("Workorder", "OA引擎")
+        menuRepo.ChangeMeta("SomeMenu", func(meta *router.Meta) {
+            meta.Icon = "ep:office-building"
+        })
+    })
+}
+```
+
+- `ChangeName(menuName, newTitle)`：修改 `Meta.Title`
+- `ChangeMeta(menuName, mutator)`：修改任意 Meta 字段
+- 修改在 `MenuSaveServiceProvider` 写库前生效，会持久化到数据库
 
 ## 配置与配置文件生成
 

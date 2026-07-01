@@ -417,10 +417,15 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 		for _, app := range i.subApps {
 			app.RegisterRouters()
 			i.menus = append(i.menus, app.Menu()...)
-			app.Bootstrap()
 		}
+
 		// 将所有子应用的菜单添加到菜单管理器
 		i.menuManager.AddMenu(i.menus...)
+
+		// 启动所有子应用
+		for _, app := range i.subApps {
+			app.Bootstrap()
+		}
 	}
 
 	for _, serviceProvider := range i.serviceProviders {

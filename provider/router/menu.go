@@ -70,6 +70,42 @@ func (m *MenuRepository) AddMenu(menus ...*Menu) {
 	staticMenus = append(staticMenus, menus...)
 }
 
+// ChangeName 按路由 Name 递归查找菜单节点，将 Meta.Title 改为 newTitle；找到返回 true
+func (m *MenuRepository) ChangeName(menuName, newTitle string) bool {
+	return m.ChangeMeta(menuName, func(meta *Meta) {
+		meta.Title = newTitle
+	})
+}
+
+// ChangeMeta 按路由 Name 递归查找菜单节点，用 mutator 修改 Meta；找到返回 true
+func (m *MenuRepository) ChangeMeta(menuName string, mutator func(meta *Meta)) bool {
+	if mutator == nil {
+		return false
+	}
+	for _, menu := range staticMenus {
+		if changeMenuMeta(menu, menuName, mutator) {
+			return true
+		}
+	}
+	return false
+}
+
+func changeMenuMeta(menu *Menu, menuName string, mutator func(meta *Meta)) bool {
+	if menu == nil {
+		return false
+	}
+	if menu.Name == menuName {
+		mutator(&menu.Meta)
+		return true
+	}
+	for _, child := range menu.Children {
+		if changeMenuMeta(child, menuName, mutator) {
+			return true
+		}
+	}
+	return false
+}
+
 // CloneMenus 复制菜单, 避免修改原菜单
 func (m *MenuRepository) CloneMenus() []*Menu {
 	var clonedMenus []*Menu
