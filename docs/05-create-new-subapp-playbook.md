@@ -26,7 +26,7 @@
 
 - 在 `app/` 下创建 `app.go`，定义实现 `owl.SubApp` 的结构体（如 `SubAppOrder`）。
 - **必须**包含字段：`app foundation.Application`。
-- 实现全部接口方法：`Name`、`RegisterRouters`、`ServiceProviders`、`Binds`、`Menu`、`Commands`、`Bootstrap`。
+- 实现全部接口方法：`Name`、`RegisterRouters`、`ServiceProviders`、`Binds`、`RegisterMenus`、`RegisterCommands`、`Bootstrap`、`RegisterMigrate`、`BeforeMigrate`、`AfterMigrate`。
 - `ServiceProviders()` 至少返回本子应用需要的 Provider（如 `router.RouterServiceProvider`、`db.DBServiceProvider`、`redis.RedisServiceProvider` 等）。
 - `Binds()` 可先返回 `nil` 或空切片，后续按资源递增。
 
@@ -61,7 +61,7 @@
 4. **handle**：在 `app/handle/v1/` 实现 HTTP 处理，实现 `router.Handler`（`ModuleName()`），方法内 Bind → Service → `router.Success`/`router.Fail`。
 5. 在 SubApp 的 **Binds()** 中追加 `NewXxxRepository`、`NewXxxService`、`NewXxxHandle`。
 6. 在 **route** 中为该 Handle 使用 `NewRouteInfoBuilder` 注册路由与菜单。
-7. 在 **database**：在 `app/database/auto_migrate_gen.go` 的 `Migrate(db)` 中对该 model 执行 `AutoMigrate(&Xxx{})`，并在 **Bootstrap()** 中调用 `database.Migrate(migDB)`。
+7. 在 **database**：在 `app/database/auto_migrate_gen.go` 提供 `Models() []any`，并在 SubApp 上实现 `RegisterMigrate() []any { return database.Models() }`；种子或修补逻辑放在 `AfterMigrate(db)`（必要时用 `BeforeMigrate`）。框架会在全部 Bootstrap 结束后统一执行带 hash 门控的 AutoMigrate。
 
 ## 步骤 7：配置与首次运行
 

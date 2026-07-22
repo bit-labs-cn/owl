@@ -6,6 +6,7 @@ import (
 	"bit-labs.cn/owl/provider/router"
 	subcmd "bit-labs.cn/owl/sub-utils/cmd"
 	"github.com/spf13/cobra"
+	"gorm.io/gorm"
 )
 
 var _ owl.SubApp = (*SubAppUtils)(nil)
@@ -34,12 +35,18 @@ func (i *SubAppUtils) Binds() []any {
 	return []any{}
 }
 
-func (i *SubAppUtils) Menu() []*router.Menu {
+func (i *SubAppUtils) RegisterMenus() []*router.Menu {
 	return nil
 }
 
-func (i *SubAppUtils) Commands() []*cobra.Command {
+func (i *SubAppUtils) RegisterCommands() []*cobra.Command {
 	return []*cobra.Command{subcmd.NewUtilsCertCmd()}
 }
 
 func (i *SubAppUtils) Bootstrap() {}
+
+func (i *SubAppUtils) RegisterMigrate() []any { return nil }
+
+func (i *SubAppUtils) BeforeMigrate(db *gorm.DB) error { return nil }
+
+func (i *SubAppUtils) AfterMigrate(db *gorm.DB) error { return nil }

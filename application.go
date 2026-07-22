@@ -21,6 +21,8 @@ import (
 	"bit-labs.cn/owl/utils"
 	"github.com/spf13/cobra"
 	"go.uber.org/dig"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // SubApp 子应用
@@ -29,10 +31,18 @@ type SubApp interface {
 	RegisterRouters()
 	ServiceProviders() []foundation.ServiceProvider
 	Binds() []any
-	Menu() []*router.Menu
-	Commands() []*cobra.Command
-	// Bootstrap 应用启动前执行，如初始化配置,初始化数据，初始化表结构等
+	// Bootstrap 引导程序
 	Bootstrap()
+	// RegisterMenus 注册菜单
+	RegisterMenus() []*router.Menu
+	// RegisterCommands 注册命令
+	RegisterCommands() []*cobra.Command
+	// RegisterMigrate 返回待 AutoMigrate 的 GORM model 列表
+	RegisterMigrate() []any
+	// BeforeMigrate AutoMigrate 前钩子（始终执行，可用于 DropColumn 等）
+	BeforeMigrate(db *gorm.DB) error
+	// AfterMigrate AutoMigrate 后钩子（始终执行，可用于种子数据、索引修补等）
+	AfterMigrate(db *gorm.DB) error
 }
 
 const (
@@ -196,7 +206,7 @@ func (i *Application) Register(providers ...any) {
 		err := i.Provide(p)
 		if err != nil {
 			err = i.Invoke(func(l logContract.Logger) {
-				//l.Info(err.Error())
+				l.Info(err.Error())
 			})
 			PanicIf(err)
 		}
@@ -399,7 +409,7 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 			PanicIf(err)
 		}
 
-		i.commands = append(i.commands, app.Commands()...)
+		i.commands = append(i.commands, app.RegisterCommands()...)
 
 		i.serviceProviders = append(i.serviceProviders, app.ServiceProviders()...)
 	}
@@ -416,7 +426,7 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 	} else {
 		for _, app := range i.subApps {
 			app.RegisterRouters()
-			i.menus = append(i.menus, app.Menu()...)
+			i.menus = append(i.menus, app.RegisterMenus()...)
 		}
 
 		// 将所有子应用的菜单添加到菜单管理器
@@ -425,6 +435,17 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 		// 启动所有子应用
 		for _, app := range i.subApps {
 			app.Bootstrap()
+		}
+	}
+
+	// 全部 Bootstrap 结束后，按 SubApp.RegisterMigrate / BeforeMigrate / AfterMigrate 统一迁移
+	if err := i.Invoke(func(gdb *gorm.DB) {
+		migDB := gdb.Session(&gorm.Session{Logger: gdb.Config.Logger.LogMode(logger.Error)})
+		PanicIf(i.runAutoMigrate(migDB))
+	}); err != nil {
+		// 未注册 *gorm.DB（无 DB provider）时跳过
+		if i.l != nil {
+			i.l.Debug("skip AutoMigrate:", err.Error())
 		}
 	}
 

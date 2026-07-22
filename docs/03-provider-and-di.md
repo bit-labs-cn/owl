@@ -22,7 +22,7 @@ Provider 结构体同样需要 `app foundation.Application` 字段，框架会�
 
 ## Boot
 
-所有 SubApp 与 Provider 的 `Register()` 和子应用的 `RegisterRouters()`、`Menu()`、`Bootstrap()` 执行完后，再统一执行每个 Provider 的 `Boot()`。适合做依赖已就绪的收尾初始化。
+所有 SubApp 与 Provider 的 `Register()` 和子应用的 `RegisterRouters()`、`RegisterMenus()`、`Bootstrap()` 执行完后，再统一执行每个 Provider 的 `Boot()`。适合做依赖已就绪的收尾初始化。
 
 ## Binds() 组织方式
 

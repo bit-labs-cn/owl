@@ -18,8 +18,8 @@ type Handler interface {
 
 ## 菜单
 
-- 每个子应用通过 `Menu()` 返回 `[]*router.Menu`，框架在 WebShell 下收集后调用 `menuManager.AddMenu(i.menus...)`，再执行各 SubApp 的 `Bootstrap()`。  
-- 单模块的菜单可由 `RouterInfoBuilder` 的 `MenuOption` 与 `GetMenu()` 得到，再在子应用内组装成树并在 `Menu()` 中返回。  
+- 每个子应用通过 `RegisterMenus()` 返回 `[]*router.Menu`，框架在 WebShell 下收集后调用 `menuManager.AddMenu(i.menus...)`，再执行各 SubApp 的 `Bootstrap()`。  
+- 单模块的菜单可由 `RouterInfoBuilder` 的 `MenuOption` 与 `GetMenu()` 得到，再在子应用内组装成树并在 `RegisterMenus()` 中返回。  
 - 菜单结构见 `provider/router/menu.go`（`Menu`、`Meta`、`MenuType` 等）。
 
 ### 宿主定制菜单 Meta

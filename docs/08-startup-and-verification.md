@@ -18,7 +18,7 @@
 - `ServiceProviders()` 至少包含 `router.RouterServiceProvider` 与 `db.DBServiceProvider`
 - `Binds()` 已注册 `NewXxxHandle`、`NewXxxService`、`NewXxxRepository`
 - `RegisterRouters()` 已调用 `route.InitApi(i.app, i.Name())`
-- `Bootstrap()` 已调用 `database.Migrate(...)`
+- SubApp 已实现 `RegisterMigrate()` / `BeforeMigrate` / `AfterMigrate`
 
 ### 3. 先用 sqlite 跑通
 
@@ -68,7 +68,7 @@ go run ./...
 
 ### 2. 自动建表
 
-如果 `Bootstrap()` 中调用了 `database.Migrate()`，第一次启动后数据库里应出现你在 `Migrate(db)` 中声明的表。
+如果 SubApp 实现了 `RegisterMigrate()`，第一次启动后框架会对每个 Model 分别 AutoMigrate，并在 `storage/migrate_hash.txt` 中按行记录 `类型名=hash`；后续启动仅迁移结构有变化的 Model。
 
 例如最小模板应出现：
 
@@ -142,8 +142,8 @@ curl "http://127.0.0.1:8080/api/v1/orders?page=1&pageSize=10"
 
 优先排查：
 
-1. `Bootstrap()` 是否调用了 `database.Migrate`
-2. `Migrate(db)` 是否包含目标 model
+1. SubApp 是否实现了 `RegisterMigrate()` 并返回目标 model
+2. `database.Models()` 是否包含目标 model
 3. `conf/database.yaml` 是否指向正确数据库
 
 ### 启动后没看到配置文件

@@ -27,8 +27,8 @@
 | **SubApp**            | 子应用，实现 `owl.SubApp` 接口的模块，可挂到 `owl.NewApp(subApps...)` 上    |
 | **Service Provider**  | 服务提供者，实现 `foundation.ServiceProvider`，负责 Register/Boot/Conf |
 | **Binds**             | SubApp 返回的构造函数列表，用于向 DI 容器注册 Repository/Service/Handle      |
-| **WebShell**          | HTTP 模式启动，会执行 RegisterRouters、Menu、Bootstrap，最后启动 Gin       |
-| **ConsoleShell**      | 命令行模式启动，只执行 Bootstrap，并将子应用命令挂到 Cobra                       |
+| **WebShell**          | HTTP 模式启动，会执行 RegisterRouters、RegisterMenus、Bootstrap，最后启动 Gin |
+| **ConsoleShell**      | 命令行模式启动，只执行 Bootstrap，并将 `RegisterCommands()` 挂到 Cobra           |
 | **basePath / runDir** | 框架推断路径时优先用可执行文件所在目录（basePath），不存在时用当前工作目录（runDir）           |
 
 

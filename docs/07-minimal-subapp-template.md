@@ -66,12 +66,16 @@ func (i *SubAppAdmin) Binds() []any {
 }
 
 func (i *SubAppAdmin) Bootstrap() {
-	i.app.Invoke(func(gdb *gorm.DB) {
-		migDB := gdb.Session(&gorm.Session{Logger: gdb.Config.Logger.LogMode(logger.Error)})
-		go database.Migrate(migDB)
-		go seeder.InitAllDictData(migDB)
-		listener.Init(i.app)
-	})
+	listener.Init(i.app)
+}
+
+func (i *SubAppAdmin) RegisterMigrate() []any { return database.Models() }
+
+func (i *SubAppAdmin) BeforeMigrate(db *gorm.DB) error { return nil }
+
+func (i *SubAppAdmin) AfterMigrate(db *gorm.DB) error {
+	go seeder.InitAllDictData(db)
+	return nil
 }
 ```
 
@@ -457,15 +461,15 @@ bus.Subscribe(event.AssignRoleToUser, func(req *service.AssignRoleToUser) {
 
 ## `app/database/auto_migrate_gen.go`（迁移）
 
-确保 `User` 与 `UserMenu` 已在迁移列表中：
+确保 `User` 与 `UserMenu` 已在迁移列表中，并由 SubApp.`RegisterMigrate` 返回：
 
 ```go
-func Migrate(db *gorm.DB) {
-	_ = db.Migrator().AutoMigrate(
+func Models() []any {
+	return []any{
 		// ... 省略其他模型
 		&User{},
 		&UserMenu{},
-	)
+	}
 }
 ```
 

@@ -5,7 +5,7 @@
 框架通过 `owl.NewApp(subApps...)` 创建应用，再根据运行方式选择：
 
 - **WebShell()**：HTTP 服务，注册路由与菜单，最后启动 Gin。
-- **ConsoleShell(rootCmd)**：命令行模式，只执行子应用 `Bootstrap()` 并将 `Commands()` 挂到 Cobra。
+- **ConsoleShell(rootCmd)**：命令行模式，只执行子应用 `Bootstrap()` 并将 `RegisterCommands()` 挂到 Cobra。
 
 代码入口：`application.go` 中的 `NewApp`、`WebShell`、`ConsoleShell`、`newSubApp`。
 
@@ -49,7 +49,7 @@ owl.NewApp().ConsoleShell(rootCmd)
    对每个 SubApp：`injectAppInstance(app)`，再将 `app.Binds()` 中的每个构造函数 `Provide` 进容器。
 
 2. **收集命令**  
-   `i.commands = append(i.commands, app.Commands()...)`
+   `i.commands = append(i.commands, app.RegisterCommands()...)`
 
 3. **收集 Service Provider**  
    `i.serviceProviders = append(i.serviceProviders, app.ServiceProviders()...)`
@@ -58,16 +58,20 @@ owl.NewApp().ConsoleShell(rootCmd)
    `registerServiceProviders(i.serviceProviders...)`：对每个 Provider 执行 `injectAppInstance`、`Register()`，并根据 `Conf()` 生成缺失的配置文件。
 
 5. **按模式执行子应用**  
-   - **非命令行**：先对每个 SubApp 依次 `RegisterRouters()`、收集 `Menu()`，再 `AddMenu(i.menus...)`，最后对每个 SubApp 执行 `Bootstrap()`。
-   - **命令行**：对每个 SubApp 只执行 `Bootstrap()`。
+   - **非命令行**：先对每个 SubApp 依次 `RegisterRouters()`、收集 `RegisterMenus()`，再 `AddMenu(i.menus...)`，最后对每个 SubApp 执行 `Bootstrap()`。
+   - **命令行**：对每个 SubApp 只执行 `Bootstrap()`。  
+   `Bootstrap()` 负责初始化配置/数据等；表结构迁移由接口方法声明，不要在 Bootstrap 里直接 `AutoMigrate`。
 
-6. **执行所有 Provider 的 Boot()**  
+6. **统一数据库迁移（hash 门控）**  
+   全部 `Bootstrap()` 结束后，框架依次调用各 SubApp 的 `BeforeMigrate` → 对每个 `RegisterMigrate()` 返回的 Model **分别**计算 schema hash（写入 `storage/migrate_hash.txt`，每行 `类型名=hash`）→ **仅对变化的 Model** 执行 `AutoMigrate` → 各 SubApp 的 `AfterMigrate`。未变化的 Model 跳过，Before/After 始终执行。
+
+7. **执行所有 Provider 的 Boot()**  
    `for _, serviceProvider := range i.serviceProviders { serviceProvider.Boot() }`
 
-7. **Web 模式**  
+8. **Web 模式**  
    `WebShell()` 最后 `Invoke` 解析 `*router.RouterServiceProvider` 并调用 `Run()` 启动 HTTP。
 
-8. **Console 模式**  
+9. **Console 模式**  
    `ConsoleShell()` 将 `i.commands` 挂到 `rootCmd` 并执行 `rootCmd.Execute()`。
 
 ## 路径推断规则
@@ -82,5 +86,5 @@ owl.NewApp().ConsoleShell(rootCmd)
 ## 完成定义
 
 - 能说明 `NewApp` → `registerBase*` → `WebShell/ConsoleShell` → `newSubApp` 的调用顺序。
-- 能说明 Web 与 Console 模式下 SubApp 的 `RegisterRouters`、`Menu`、`Bootstrap` 是否执行。
+- 能说明 Web 与 Console 模式下 SubApp 的 `RegisterRouters`、`RegisterMenus`、`Bootstrap` 是否执行。
 - 能说明 `basePath` 与 `runDir` 对配置与存储目录的影响。

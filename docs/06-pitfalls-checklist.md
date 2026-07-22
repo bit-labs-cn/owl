@@ -40,7 +40,7 @@
 - [ ] SubApp 结构体有 `app foundation.Application` 字段。
 - [ ] 所有新增的 Handle、Service、Repository 构造函数已加入 `Binds()`。
 - [ ] 路由在 `RegisterRouters()` 中通过 `NewRouteInfoBuilder` 正确注册，且访问级别与权限中间件一致。
-- [ ] 新 model 已加入 `database.Migrate()` 的 `AutoMigrate` 列表，且 `Bootstrap()` 中调用了迁移。
+- [ ] 新 model 已加入 `database.Models()`，且 SubApp 实现了 `RegisterMigrate()` 返回该列表。
 - [ ] 若使用自定义 Provider，其结构体也有 `app` 字段，且已在 `ServiceProviders()` 中注册。
 - [ ] 部署环境下 `conf/`、`storage/` 路径符合预期（basePath/runDir）。
 - [ ] 敏感配置通过环境变量或外部配置管理，未提交到仓库。
