@@ -86,7 +86,8 @@ type Application struct {
 	 *
 	 * @var \Illuminate\Support\ServiceProvider[]
 	 */
-	serviceProviders []foundation.ServiceProvider
+	serviceProviders     []foundation.ServiceProvider
+	baseServiceProviders []foundation.ServiceProvider
 
 	/**
 	 * The names of the loaded service providers.
@@ -206,7 +207,7 @@ func (i *Application) Register(providers ...any) {
 		err := i.Provide(p)
 		if err != nil {
 			err = i.Invoke(func(l logContract.Logger) {
-				l.Info(err.Error())
+				l.Warning(err.Error())
 			})
 			PanicIf(err)
 		}
@@ -336,14 +337,17 @@ func (i *Application) ConsoleShell(rootCmd *cobra.Command) {
 }
 
 func (i *Application) ShowProviders() {
+	i.l.Info("============================核心服务提供者==========================================")
+	for _, provider := range i.baseServiceProviders {
+		providerType := reflect.TypeOf(provider).String()
+		i.l.Info(providerType, provider.Description())
+	}
+
 	i.l.Info("============================已注册服务提供者==========================================")
 	for _, provider := range i.serviceProviders {
 		providerType := reflect.TypeOf(provider).String()
 		i.l.Info(providerType, provider.Description())
 	}
-
-	i.l.Info("======================================================================================")
-
 }
 
 func (i *Application) ShowSubApps() {
@@ -365,7 +369,7 @@ func (i *Application) registerBaseServiceProviders() {
 		&validator.ValidatorServiceProvider{},
 	}
 
-	i.serviceProviders = append(i.serviceProviders, baseProviders...)
+	i.baseServiceProviders = append(i.baseServiceProviders, baseProviders...)
 	i.registerServiceProviders(baseProviders...)
 
 	err := i.Invoke(func(l logContract.Logger) {
