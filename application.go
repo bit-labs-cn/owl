@@ -433,26 +433,33 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 	if i.isRunningInConsole {
 		stepStart = time.Now()
 		for _, app := range i.subApps {
+			step := fmt.Sprintf("Bootstrap[%s]", app.Name())
+			i.debugStartupBegin(step)
 			appStart := time.Now()
 			app.Bootstrap()
-			i.debugStartup(fmt.Sprintf("Bootstrap[%s]", app.Name()), appStart)
+			i.debugStartup(step, appStart)
 		}
 		i.debugStartup("Bootstrap(all)", stepStart)
 
 	} else {
 		stepStart = time.Now()
 		for _, app := range i.subApps {
+			step := fmt.Sprintf("RegisterRouters[%s]", app.Name())
+			i.debugStartupBegin(step)
 			appStart := time.Now()
 			app.RegisterRouters()
-			i.debugStartup(fmt.Sprintf("RegisterRouters[%s]", app.Name()), appStart)
+			i.debugStartup(step, appStart)
 
+			step = fmt.Sprintf("RegisterMenus[%s]", app.Name())
+			i.debugStartupBegin(step)
 			appStart = time.Now()
 			i.menus = append(i.menus, app.RegisterMenus()...)
-			i.debugStartup(fmt.Sprintf("RegisterMenus[%s]", app.Name()), appStart)
+			i.debugStartup(step, appStart)
 		}
 		i.debugStartup("RegisterRouters+Menus(all)", stepStart)
 
 		// 将所有子应用的菜单添加到菜单管理器
+		i.debugStartupBegin("AddMenu")
 		stepStart = time.Now()
 		i.menuManager.AddMenu(i.menus...)
 		i.debugStartup("AddMenu", stepStart)
@@ -460,14 +467,17 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 		// 启动所有子应用
 		stepStart = time.Now()
 		for _, app := range i.subApps {
+			step := fmt.Sprintf("Bootstrap[%s]", app.Name())
+			i.debugStartupBegin(step)
 			appStart := time.Now()
 			app.Bootstrap()
-			i.debugStartup(fmt.Sprintf("Bootstrap[%s]", app.Name()), appStart)
+			i.debugStartup(step, appStart)
 		}
 		i.debugStartup("Bootstrap(all)", stepStart)
 	}
 
 	// 全部 Bootstrap 结束后，按 SubApp.RegisterMigrate / BeforeMigrate / AfterMigrate 统一迁移
+	i.debugStartupBegin("runAutoMigrate")
 	stepStart = time.Now()
 	if err := i.Invoke(func(gdb *gorm.DB) {
 		migDB := gdb.Session(&gorm.Session{Logger: gdb.Config.Logger.LogMode(logger.Error)})
@@ -482,9 +492,11 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 
 	stepStart = time.Now()
 	for _, serviceProvider := range i.serviceProviders {
+		step := fmt.Sprintf("Provider.Boot[%s]", serviceProvider.Description())
+		i.debugStartupBegin(step)
 		bootStart := time.Now()
 		serviceProvider.Boot()
-		i.debugStartup(fmt.Sprintf("Provider.Boot[%s]", serviceProvider.Description()), bootStart)
+		i.debugStartup(step, bootStart)
 	}
 	i.debugStartup("Provider.Boot(all)", stepStart)
 
@@ -494,12 +506,20 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 	i.debugStartup("newSubApp(total)", totalStart)
 }
 
+// debugStartupBegin 标记启动步骤开始（卡住时看最后一条 begin 即可定位）。
+func (i *Application) debugStartupBegin(step string) {
+	if i.l == nil {
+		return
+	}
+	i.l.Debug(fmt.Sprintf("startup begin %s", step))
+}
+
 // debugStartup 输出启动阶段耗时（需日志级别含 debug）。
 func (i *Application) debugStartup(step string, start time.Time) {
 	if i.l == nil {
 		return
 	}
-	i.l.Debug(fmt.Sprintf("[startup] %s took %s", step, time.Since(start)))
+	i.l.Debug(fmt.Sprintf("startup %s took %s", step, time.Since(start)))
 }
 
 func (i *Application) injectAppInstance(target any) {

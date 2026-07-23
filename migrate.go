@@ -23,11 +23,13 @@ func (i *Application) runAutoMigrate(gdb *gorm.DB) error {
 
 	stepStart := time.Now()
 	for _, app := range i.subApps {
+		step := fmt.Sprintf("BeforeMigrate[%s]", app.Name())
+		i.debugStartupBegin(step)
 		appStart := time.Now()
 		if err := app.BeforeMigrate(gdb); err != nil {
 			return err
 		}
-		i.debugStartup(fmt.Sprintf("BeforeMigrate[%s]", app.Name()), appStart)
+		i.debugStartup(step, appStart)
 	}
 	i.debugStartup("BeforeMigrate(all)", stepStart)
 
@@ -58,6 +60,7 @@ func (i *Application) runAutoMigrate(gdb *gorm.DB) error {
 
 		// 并行计算各 model 的 schema hash（纯 CPU，按索引写回无竞争）
 		stepStart = time.Now()
+		i.debugStartupBegin(fmt.Sprintf("ModelSchemaHash(%d models)", len(typeNames)))
 		hashes := make([]string, len(typeNames))
 		var hashGroup errgroup.Group
 		for idx, name := range typeNames {
@@ -90,6 +93,7 @@ func (i *Application) runAutoMigrate(gdb *gorm.DB) error {
 			}
 		} else {
 			stepStart = time.Now()
+			i.debugStartupBegin(fmt.Sprintf("AutoMigrate(%d models)", len(changed)))
 			if err := gdb.AutoMigrate(changed...); err != nil {
 				return err
 			}
@@ -108,13 +112,16 @@ func (i *Application) runAutoMigrate(gdb *gorm.DB) error {
 	}
 
 	stepStart = time.Now()
+	i.debugStartupBegin("AfterMigrate(all)")
 	var afterGroup errgroup.Group
 	for _, app := range i.subApps {
 		app := app
 		afterGroup.Go(func() error {
+			step := fmt.Sprintf("AfterMigrate[%s]", app.Name())
+			i.debugStartupBegin(step)
 			appStart := time.Now()
 			err := app.AfterMigrate(gdb)
-			i.debugStartup(fmt.Sprintf("AfterMigrate[%s]", app.Name()), appStart)
+			i.debugStartup(step, appStart)
 			return err
 		})
 	}

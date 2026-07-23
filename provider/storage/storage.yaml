@@ -43,11 +43,11 @@ s3:
 # MinIO 配置
 minio:
   # 端点
-  endpoint: localhost:9000
+  endpoint:
   # 访问密钥 ID
-  access-key-id: minioadmin
+  access-key-id:
   # 访问密钥
-  secret-access-key: minioadmin
+  secret-access-key:
   # 是否使用 HTTPS
   use-ssl: false
   # 存储桶名称
