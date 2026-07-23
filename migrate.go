@@ -7,20 +7,29 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"bit-labs.cn/owl/internal/utils"
+	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
 
 const migrateHashFile = "migrate_hash.txt"
 
 // runAutoMigrate 执行各 SubApp 的 BeforeMigrate →（按 model hash 门控 AutoMigrate）→ AfterMigrate。
+// BeforeMigrate / AutoMigrate 串行；schema hash 与 AfterMigrate 在子应用间并行，AfterMigrate 全部完成（或任一失败）后再返回。
 func (i *Application) runAutoMigrate(gdb *gorm.DB) error {
+	totalStart := time.Now()
+
+	stepStart := time.Now()
 	for _, app := range i.subApps {
+		appStart := time.Now()
 		if err := app.BeforeMigrate(gdb); err != nil {
 			return err
 		}
+		i.debugStartup(fmt.Sprintf("BeforeMigrate[%s]", app.Name()), appStart)
 	}
+	i.debugStartup("BeforeMigrate(all)", stepStart)
 
 	models := make([]any, 0)
 	for _, app := range i.subApps {
@@ -34,7 +43,6 @@ func (i *Application) runAutoMigrate(gdb *gorm.DB) error {
 		// 按类型去重，保留首次出现的实例
 		typeNames := make([]string, 0, len(models))
 		typeToModel := make(map[string]any, len(models))
-		typeToHash := make(map[string]string, len(models))
 		for _, m := range models {
 			name := utils.ModelTypeName(m)
 			if name == "" {
@@ -44,14 +52,32 @@ func (i *Application) runAutoMigrate(gdb *gorm.DB) error {
 				continue
 			}
 			typeToModel[name] = m
-			typeToHash[name] = utils.ModelSchemaHash(m)
 			typeNames = append(typeNames, name)
 		}
 		sort.Strings(typeNames)
 
+		// 并行计算各 model 的 schema hash（纯 CPU，按索引写回无竞争）
+		stepStart = time.Now()
+		hashes := make([]string, len(typeNames))
+		var hashGroup errgroup.Group
+		for idx, name := range typeNames {
+			idx, name := idx, name
+			m := typeToModel[name]
+			hashGroup.Go(func() error {
+				hashes[idx] = utils.ModelSchemaHash(m)
+				return nil
+			})
+		}
+		if err := hashGroup.Wait(); err != nil {
+			return err
+		}
+		i.debugStartup(fmt.Sprintf("ModelSchemaHash(%d models)", len(typeNames)), stepStart)
+
+		typeToHash := make(map[string]string, len(typeNames))
 		changed := make([]any, 0)
-		for _, name := range typeNames {
-			h := typeToHash[name]
+		for idx, name := range typeNames {
+			h := hashes[idx]
+			typeToHash[name] = h
 			if prev[name] == h {
 				continue
 			}
@@ -63,9 +89,12 @@ func (i *Application) runAutoMigrate(gdb *gorm.DB) error {
 				i.l.Info("all model schema hashes unchanged, skip AutoMigrate")
 			}
 		} else {
+			stepStart = time.Now()
 			if err := gdb.AutoMigrate(changed...); err != nil {
 				return err
 			}
+			i.debugStartup(fmt.Sprintf("AutoMigrate(%d models)", len(changed)), stepStart)
+
 			if err := os.MkdirAll(i.GetStoragePath(), 0755); err != nil {
 				return err
 			}
@@ -78,11 +107,22 @@ func (i *Application) runAutoMigrate(gdb *gorm.DB) error {
 		}
 	}
 
+	stepStart = time.Now()
+	var afterGroup errgroup.Group
 	for _, app := range i.subApps {
-		if err := app.AfterMigrate(gdb); err != nil {
+		app := app
+		afterGroup.Go(func() error {
+			appStart := time.Now()
+			err := app.AfterMigrate(gdb)
+			i.debugStartup(fmt.Sprintf("AfterMigrate[%s]", app.Name()), appStart)
 			return err
-		}
+		})
 	}
+	if err := afterGroup.Wait(); err != nil {
+		return err
+	}
+	i.debugStartup("AfterMigrate(all)", stepStart)
+	i.debugStartup("runAutoMigrate(total)", totalStart)
 	return nil
 }
 

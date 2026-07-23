@@ -63,7 +63,8 @@ owl.NewApp().ConsoleShell(rootCmd)
    `Bootstrap()` 负责初始化配置/数据等；表结构迁移由接口方法声明，不要在 Bootstrap 里直接 `AutoMigrate`。
 
 6. **统一数据库迁移（hash 门控）**  
-   全部 `Bootstrap()` 结束后，框架依次调用各 SubApp 的 `BeforeMigrate` → 对每个 `RegisterMigrate()` 返回的 Model **分别**计算 schema hash（写入 `storage/migrate_hash.txt`，每行 `类型名=hash`）→ **仅对变化的 Model** 执行 `AutoMigrate` → 各 SubApp 的 `AfterMigrate`。未变化的 Model 跳过，Before/After 始终执行。
+   全部 `Bootstrap()` 结束后，框架执行：各 SubApp 的 `BeforeMigrate`（**串行**）→ 对每个 `RegisterMigrate()` 返回的 Model **分别**计算 schema hash（**并行**；写入 `storage/migrate_hash.txt`，每行 `类型名=hash`）→ **仅对变化的 Model** 串行执行 `AutoMigrate` → 各 SubApp 的 `AfterMigrate`（**并行**，全部完成或任一失败后再继续）。未变化的 Model 跳过，Before/After 始终执行。  
+   `RegisterRouters`、`Bootstrap`、`Provider.Boot` 仍串行。幂等种子若可接受延迟，可在 `AfterMigrate` 内自行 `go`（如 owl-admin 字典种子），框架层不会 fire-and-forget。
 
 7. **执行所有 Provider 的 Boot()**  
    `for _, serviceProvider := range i.serviceProviders { serviceProvider.Boot() }`

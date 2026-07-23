@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"time"
 	"unsafe"
 
 	"bit-labs.cn/owl/provider/appconf"
@@ -403,46 +404,71 @@ func (i *Application) registerServiceProviders(provider ...foundation.ServicePro
 }
 
 func (i *Application) newSubApp(subApps ...SubApp) {
+	totalStart := time.Now()
 
+	stepStart := time.Now()
 	for _, app := range subApps {
 		// 为子应用注入 app 实例
 		i.injectAppInstance(app)
 
+		appStart := time.Now()
 		for _, bind := range app.Binds() {
 			err := i.Provide(bind)
 			PanicIf(err)
 		}
+		i.debugStartup(fmt.Sprintf("Binds[%s]", app.Name()), appStart)
 
 		i.commands = append(i.commands, app.RegisterCommands()...)
 
 		i.serviceProviders = append(i.serviceProviders, app.ServiceProviders()...)
 	}
+	i.debugStartup("injectApp+Binds+collect", stepStart)
 
 	// 注册所有服务提供者
+	stepStart = time.Now()
 	i.registerServiceProviders(i.serviceProviders...)
+	i.debugStartup("registerServiceProviders", stepStart)
 
 	// 判断是否是命令行模式，非命令行模式注册路由和添加菜单
 	if i.isRunningInConsole {
+		stepStart = time.Now()
 		for _, app := range i.subApps {
+			appStart := time.Now()
 			app.Bootstrap()
+			i.debugStartup(fmt.Sprintf("Bootstrap[%s]", app.Name()), appStart)
 		}
+		i.debugStartup("Bootstrap(all)", stepStart)
 
 	} else {
+		stepStart = time.Now()
 		for _, app := range i.subApps {
+			appStart := time.Now()
 			app.RegisterRouters()
+			i.debugStartup(fmt.Sprintf("RegisterRouters[%s]", app.Name()), appStart)
+
+			appStart = time.Now()
 			i.menus = append(i.menus, app.RegisterMenus()...)
+			i.debugStartup(fmt.Sprintf("RegisterMenus[%s]", app.Name()), appStart)
 		}
+		i.debugStartup("RegisterRouters+Menus(all)", stepStart)
 
 		// 将所有子应用的菜单添加到菜单管理器
+		stepStart = time.Now()
 		i.menuManager.AddMenu(i.menus...)
+		i.debugStartup("AddMenu", stepStart)
 
 		// 启动所有子应用
+		stepStart = time.Now()
 		for _, app := range i.subApps {
+			appStart := time.Now()
 			app.Bootstrap()
+			i.debugStartup(fmt.Sprintf("Bootstrap[%s]", app.Name()), appStart)
 		}
+		i.debugStartup("Bootstrap(all)", stepStart)
 	}
 
 	// 全部 Bootstrap 结束后，按 SubApp.RegisterMigrate / BeforeMigrate / AfterMigrate 统一迁移
+	stepStart = time.Now()
 	if err := i.Invoke(func(gdb *gorm.DB) {
 		migDB := gdb.Session(&gorm.Session{Logger: gdb.Config.Logger.LogMode(logger.Error)})
 		PanicIf(i.runAutoMigrate(migDB))
@@ -452,14 +478,28 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 			i.l.Debug("skip AutoMigrate:", err.Error())
 		}
 	}
+	i.debugStartup("runAutoMigrate", stepStart)
 
+	stepStart = time.Now()
 	for _, serviceProvider := range i.serviceProviders {
+		bootStart := time.Now()
 		serviceProvider.Boot()
+		i.debugStartup(fmt.Sprintf("Provider.Boot[%s]", serviceProvider.Description()), bootStart)
 	}
+	i.debugStartup("Provider.Boot(all)", stepStart)
 
 	// 显示信息
 	i.ShowProviders()
 	i.ShowSubApps()
+	i.debugStartup("newSubApp(total)", totalStart)
+}
+
+// debugStartup 输出启动阶段耗时（需日志级别含 debug）。
+func (i *Application) debugStartup(step string, start time.Time) {
+	if i.l == nil {
+		return
+	}
+	i.l.Debug(fmt.Sprintf("[startup] %s took %s", step, time.Since(start)))
 }
 
 func (i *Application) injectAppInstance(target any) {
