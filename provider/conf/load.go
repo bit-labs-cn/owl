@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"bit-labs.cn/owl/contract/foundation"
@@ -17,6 +18,8 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	"github.com/spf13/viper"
 )
+
+var configErrorLinePattern = regexp.MustCompile(`(?i)\bline\s+(\d+)\b`)
 
 type Configure struct {
 	confDir        string
@@ -154,15 +157,15 @@ func (i *Configure) load(fileName, cfgType string, c any) (string, *viper.Viper)
 	//i.l.Info("配置文件: ", confFilePath)
 	cfg, err := os.ReadFile(confFilePath)
 	if err != nil {
-		panic(fmt.Sprint("读取配置文件失败", err))
+		panic(formatConfigFileError("读取", confFilePath, err))
 	}
 	if err = v.ReadConfig(bytes.NewReader(cfg)); err != nil {
-		panic(fmt.Sprint("读取配置文件失败", err))
+		panic(formatConfigFileError("解析", confFilePath, err))
 	}
 
 	// 转换为结构体
 	if err := v.Unmarshal(&c); err != nil {
-		panic("转为配置结构体失败")
+		panic(formatConfigFileError("转换", confFilePath, err))
 	}
 
 	// Watch for changes in the config file
@@ -172,4 +175,13 @@ func (i *Configure) load(fileName, cfgType string, c any) (string, *viper.Viper)
 		i.eventBus.Publish(ConfigChangeEvent, e)
 	})
 	return confFilePath, v
+}
+
+func formatConfigFileError(action, path string, err error) error {
+	location := ""
+	if matches := configErrorLinePattern.FindStringSubmatch(err.Error()); len(matches) == 2 {
+		location = fmt.Sprintf("（第 %s 行）", matches[1])
+	}
+
+	return fmt.Errorf("%s配置文件失败：%s%s：%w", action, path, location, err)
 }
