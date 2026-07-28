@@ -360,7 +360,7 @@ func (i *Application) ShowSubApps() {
 
 }
 
-// 注册基础服务提供者
+// 注册基础服务提供者（只写 Conf + Register，不触发 Configure 加载）
 func (i *Application) registerBaseServiceProviders() {
 	var baseProviders = []foundation.ServiceProvider{
 		&conf.ConfServiceProvider{},
@@ -371,23 +371,15 @@ func (i *Application) registerBaseServiceProviders() {
 	}
 
 	i.baseServiceProviders = append(i.baseServiceProviders, baseProviders...)
-	i.registerServiceProviders(baseProviders...)
-
-	err := i.Invoke(func(l logContract.Logger) {
-		i.l = l
-	})
-
-	PanicIf(err)
+	i.generateProviderConfigs(baseProviders...)
+	i.registerProviders(baseProviders...)
 }
 
-func (i *Application) registerServiceProviders(provider ...foundation.ServiceProvider) {
-
-	for _, serviceProvider := range provider {
-		// 将服务提供者注入 app 实例
+// generateProviderConfigs 将各 Provider 的 Conf() 默认配置落盘（已存在则校验缺键）
+func (i *Application) generateProviderConfigs(providers ...foundation.ServiceProvider) {
+	for _, serviceProvider := range providers {
 		i.injectAppInstance(serviceProvider)
-		serviceProvider.Register()
 
-		// 服务提供者配置文件生成
 		cfgFileGen := serviceProvider.Conf()
 		for fileName, content := range cfgFileGen {
 			confFile := i.GetConfigPath() + "/" + fileName
@@ -395,12 +387,26 @@ func (i *Application) registerServiceProviders(provider ...foundation.ServicePro
 			if os.IsNotExist(err) {
 				_ = os.WriteFile(confFile, []byte(content), 0644)
 			} else {
-				// 检查现有配置与嵌入默认配置的键是否一致，缺少则警告
 				conf.ValidateConfigKeys(serviceProvider.Description(), fileName, content, i.GetConfigPath())
 			}
 		}
-
 	}
+}
+
+// registerProviders 仅调用 Register（依赖注入工厂），不读写配置文件
+func (i *Application) registerProviders(providers ...foundation.ServiceProvider) {
+	for _, serviceProvider := range providers {
+		i.injectAppInstance(serviceProvider)
+		serviceProvider.Register()
+	}
+}
+
+// initLogger 首次解析 Logger，顺带触发 NewConfigure 加载 conf 目录
+func (i *Application) initLogger() {
+	err := i.Invoke(func(l logContract.Logger) {
+		i.l = l
+	})
+	PanicIf(err)
 }
 
 func (i *Application) newSubApp(subApps ...SubApp) {
@@ -424,10 +430,18 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 	}
 	i.debugStartup("injectApp+Binds+collect", stepStart)
 
-	// 注册所有服务提供者
+	// 先落盘子应用配置，再 Register；全部 Conf 就绪后再加载 Configure
 	stepStart = time.Now()
-	i.registerServiceProviders(i.serviceProviders...)
-	i.debugStartup("registerServiceProviders", stepStart)
+	i.generateProviderConfigs(i.serviceProviders...)
+	i.debugStartup("generateProviderConfigs", stepStart)
+
+	stepStart = time.Now()
+	i.registerProviders(i.serviceProviders...)
+	i.debugStartup("registerProviders", stepStart)
+
+	stepStart = time.Now()
+	i.initLogger()
+	i.debugStartup("initLogger", stepStart)
 
 	// 判断是否是命令行模式，非命令行模式注册路由和添加菜单
 	if i.isRunningInConsole {
