@@ -53,25 +53,33 @@ func NewMinIOStorage(config *MinIOConfig) (*MinIOStorage, error) {
 	}, nil
 }
 
-// Put 上传文件
+// Put 一次性保存文件；path 为调用方决定的完整对象键
 func (m *MinIOStorage) Put(ctx context.Context, path string, reader io.Reader, size int64) (*FileInfo, error) {
-	objectName := m.buildPath(path)
+	return m.putObject(ctx, NormalizeObjectKey(path), reader, size)
+}
 
-	// 上传文件
+// PutStream 流式保存文件；读至 EOF，无需预先知道 size
+func (m *MinIOStorage) PutStream(ctx context.Context, path string, reader io.Reader) (*FileInfo, error) {
+	return m.putObject(ctx, NormalizeObjectKey(path), reader, -1)
+}
+
+func (m *MinIOStorage) putObject(ctx context.Context, objectName string, reader io.Reader, size int64) (*FileInfo, error) {
+	if objectName == "" {
+		return nil, fmt.Errorf("object path is empty")
+	}
 	info, err := m.client.PutObject(ctx, m.config.Bucket, objectName, reader, size, minio.PutObjectOptions{
-		ContentType: MimeType(path),
+		ContentType: MimeType(objectName),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload file: %w", err)
 	}
 
-	// 构建文件信息
 	fileInfo := &FileInfo{
-		Name:        filepath.Base(path),
-		Path:        path,
+		Name:        filepath.Base(objectName),
+		Path:        objectName,
 		Size:        info.Size,
-		ContentType: MimeType(path),
-		Extension:   filepath.Ext(path),
+		ContentType: MimeType(objectName),
+		Extension:   filepath.Ext(objectName),
 		URL:         m.buildURL(objectName),
 		Hash:        info.ETag,
 		UploadTime:  time.Now(),
@@ -104,7 +112,7 @@ func (m *MinIOStorage) PutFile(ctx context.Context, path string, localPath strin
 
 // Get 获取文件
 func (m *MinIOStorage) Get(ctx context.Context, path string) (io.ReadCloser, error) {
-	objectName := m.buildPath(path)
+	objectName := NormalizeObjectKey(path)
 
 	object, err := m.client.GetObject(ctx, m.config.Bucket, objectName, minio.GetObjectOptions{})
 	if err != nil {
@@ -116,7 +124,7 @@ func (m *MinIOStorage) Get(ctx context.Context, path string) (io.ReadCloser, err
 
 // Delete 删除文件
 func (m *MinIOStorage) Delete(ctx context.Context, path string) error {
-	objectName := m.buildPath(path)
+	objectName := NormalizeObjectKey(path)
 
 	err := m.client.RemoveObject(ctx, m.config.Bucket, objectName, minio.RemoveObjectOptions{})
 	if err != nil {
@@ -128,7 +136,7 @@ func (m *MinIOStorage) Delete(ctx context.Context, path string) error {
 
 // Exists 检查文件是否存在
 func (m *MinIOStorage) Exists(ctx context.Context, path string) (bool, error) {
-	objectName := m.buildPath(path)
+	objectName := NormalizeObjectKey(path)
 
 	_, err := m.client.StatObject(ctx, m.config.Bucket, objectName, minio.StatObjectOptions{})
 	if err != nil {
@@ -143,7 +151,7 @@ func (m *MinIOStorage) Exists(ctx context.Context, path string) (bool, error) {
 
 // Size 获取文件大小
 func (m *MinIOStorage) Size(ctx context.Context, path string) (int64, error) {
-	objectName := m.buildPath(path)
+	objectName := NormalizeObjectKey(path)
 
 	stat, err := m.client.StatObject(ctx, m.config.Bucket, objectName, minio.StatObjectOptions{})
 	if err != nil {
@@ -155,7 +163,7 @@ func (m *MinIOStorage) Size(ctx context.Context, path string) (int64, error) {
 
 // URL 获取文件访问 URL
 func (m *MinIOStorage) URL(ctx context.Context, path string) (string, error) {
-	objectName := m.buildPath(path)
+	objectName := NormalizeObjectKey(path)
 
 	// 如果配置了 URL 前缀，直接使用
 	if m.config.URLPrefix != "" {
@@ -173,7 +181,7 @@ func (m *MinIOStorage) URL(ctx context.Context, path string) (string, error) {
 
 // List 列出文件
 func (m *MinIOStorage) List(ctx context.Context, prefix string) ([]*FileInfo, error) {
-	objectPrefix := m.buildPath(prefix)
+	objectPrefix := NormalizeObjectKey(prefix)
 
 	var files []*FileInfo
 
@@ -185,15 +193,9 @@ func (m *MinIOStorage) List(ctx context.Context, prefix string) ([]*FileInfo, er
 			return nil, fmt.Errorf("failed to list objects: %w", object.Err)
 		}
 
-		// 移除前缀，获取相对路径
-		relativePath := strings.TrimPrefix(object.Key, objectPrefix)
-		if relativePath == "" {
-			relativePath = object.Key
-		}
-
 		fileInfo := &FileInfo{
 			Name:        filepath.Base(object.Key),
-			Path:        relativePath,
+			Path:        object.Key,
 			Size:        object.Size,
 			ContentType: MimeType(object.Key),
 			Extension:   filepath.Ext(object.Key),
@@ -215,8 +217,8 @@ func (m *MinIOStorage) List(ctx context.Context, prefix string) ([]*FileInfo, er
 
 // Copy 复制文件
 func (m *MinIOStorage) Copy(ctx context.Context, srcPath, dstPath string) error {
-	srcObjectName := m.buildPath(srcPath)
-	dstObjectName := m.buildPath(dstPath)
+	srcObjectName := NormalizeObjectKey(srcPath)
+	dstObjectName := NormalizeObjectKey(dstPath)
 
 	// 创建复制源
 	src := minio.CopySrcOptions{
@@ -255,22 +257,9 @@ func (m *MinIOStorage) Move(ctx context.Context, srcPath, dstPath string) error 
 	return nil
 }
 
-// buildPath 构建对象路径
-func (m *MinIOStorage) buildPath(path string) string {
-	// 清理路径
-	path = strings.TrimPrefix(path, "/")
-
-	dateFormat := strings.TrimSpace(m.config.DateFormat)
-	if dateFormat != "" {
-		datePath := time.Now().Format(normalizeDateFormat(dateFormat))
-		path = datePath + "/" + path
-	}
-
-	return path
-}
-
-// buildURL 构建文件 URL
+// buildURL 构建文件 URL（objectName 已是完整键）
 func (m *MinIOStorage) buildURL(objectName string) string {
+	objectName = NormalizeObjectKey(objectName)
 	if m.config.URLPrefix != "" {
 		return fmt.Sprintf("%s/%s", strings.TrimRight(m.config.URLPrefix, "/"), objectName)
 	}

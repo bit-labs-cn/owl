@@ -121,10 +121,21 @@ func NewQiniuStorage(config *QiniuConfig) (*QiniuStorage, error) {
 	}, nil
 }
 
-// Put 上传文件
-func (q *QiniuStorage) Put(ctx context.Context, path string, reader io.Reader, _ int64) (*FileInfo, error) {
-	key := q.buildPath(path)
+// Put 一次性保存文件；path 为调用方决定的完整对象键
+func (q *QiniuStorage) Put(ctx context.Context, path string, reader io.Reader, size int64) (*FileInfo, error) {
+	_ = size
+	return q.putObject(ctx, NormalizeObjectKey(path), reader)
+}
 
+// PutStream 流式保存文件；读至 EOF，无需预先知道 size
+func (q *QiniuStorage) PutStream(ctx context.Context, path string, reader io.Reader) (*FileInfo, error) {
+	return q.putObject(ctx, NormalizeObjectKey(path), reader)
+}
+
+func (q *QiniuStorage) putObject(ctx context.Context, key string, reader io.Reader) (*FileInfo, error) {
+	if key == "" {
+		return nil, fmt.Errorf("object path is empty")
+	}
 	buf := new(bytes.Buffer)
 	hash := md5.New()
 	tee := io.TeeReader(reader, hash)
@@ -139,13 +150,13 @@ func (q *QiniuStorage) Put(ctx context.Context, path string, reader io.Reader, _
 	}
 
 	objectName := key
-	fileName := filepath.Base(path)
+	fileName := filepath.Base(key)
 	var ret qiniuUploadRet
 	err = q.uploadManager.UploadReader(ctx, bytes.NewReader(buf.Bytes()), &uploader.ObjectOptions{
 		BucketName:      q.config.Bucket,
 		ObjectName:      &objectName,
 		FileName:        fileName,
-		ContentType:     MimeType(path),
+		ContentType:     MimeType(key),
 		RegionsProvider: q.regions,
 		UpToken:         uptoken.NewSigner(putPolicy, q.credProv),
 	}, &ret)
@@ -154,11 +165,11 @@ func (q *QiniuStorage) Put(ctx context.Context, path string, reader io.Reader, _
 	}
 
 	return &FileInfo{
-		Name:        filepath.Base(path),
-		Path:        path,
+		Name:        filepath.Base(key),
+		Path:        key,
 		Size:        int64(buf.Len()),
-		ContentType: MimeType(path),
-		Extension:   filepath.Ext(path),
+		ContentType: MimeType(key),
+		Extension:   filepath.Ext(key),
 		URL:         q.buildURL(key),
 		Hash:        fmt.Sprintf("%x", hash.Sum(nil)),
 		UploadTime:  time.Now(),
@@ -188,7 +199,7 @@ func (q *QiniuStorage) PutFile(ctx context.Context, path string, localPath strin
 
 // Get 获取文件
 func (q *QiniuStorage) Get(ctx context.Context, path string) (io.ReadCloser, error) {
-	key := q.buildPath(path)
+	key := NormalizeObjectKey(path)
 	url := q.buildURL(key)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -211,7 +222,7 @@ func (q *QiniuStorage) Get(ctx context.Context, path string) (io.ReadCloser, err
 
 // Delete 删除文件
 func (q *QiniuStorage) Delete(ctx context.Context, path string) error {
-	key := q.buildPath(path)
+	key := NormalizeObjectKey(path)
 	err := q.bucketManager.Delete(q.config.Bucket, key)
 	if err != nil {
 		return fmt.Errorf("failed to delete file: %w", err)
@@ -221,7 +232,7 @@ func (q *QiniuStorage) Delete(ctx context.Context, path string) error {
 
 // Exists 检查文件是否存在
 func (q *QiniuStorage) Exists(ctx context.Context, path string) (bool, error) {
-	key := q.buildPath(path)
+	key := NormalizeObjectKey(path)
 	_, err := q.bucketManager.Stat(q.config.Bucket, key)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such file or directory") ||
@@ -235,7 +246,7 @@ func (q *QiniuStorage) Exists(ctx context.Context, path string) (bool, error) {
 
 // Size 获取文件大小
 func (q *QiniuStorage) Size(ctx context.Context, path string) (int64, error) {
-	key := q.buildPath(path)
+	key := NormalizeObjectKey(path)
 	fileInfo, err := q.bucketManager.Stat(q.config.Bucket, key)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get file size: %w", err)
@@ -245,13 +256,13 @@ func (q *QiniuStorage) Size(ctx context.Context, path string) (int64, error) {
 
 // URL 获取文件访问 URL
 func (q *QiniuStorage) URL(ctx context.Context, path string) (string, error) {
-	key := q.buildPath(path)
+	key := NormalizeObjectKey(path)
 	return q.buildURL(key), nil
 }
 
 // List 列出文件
 func (q *QiniuStorage) List(ctx context.Context, prefix string) ([]*FileInfo, error) {
-	keyPrefix := q.buildPath(prefix)
+	keyPrefix := NormalizeObjectKey(prefix)
 
 	var files []*FileInfo
 	marker := ""
@@ -264,14 +275,9 @@ func (q *QiniuStorage) List(ctx context.Context, prefix string) ([]*FileInfo, er
 		}
 
 		for _, entry := range entries {
-			relativePath := strings.TrimPrefix(entry.Key, keyPrefix)
-			if relativePath == "" {
-				relativePath = entry.Key
-			}
-
 			files = append(files, &FileInfo{
 				Name:        filepath.Base(entry.Key),
-				Path:        relativePath,
+				Path:        entry.Key,
 				Size:        entry.Fsize,
 				ContentType: entry.MimeType,
 				Extension:   filepath.Ext(entry.Key),
@@ -299,8 +305,8 @@ func (q *QiniuStorage) List(ctx context.Context, prefix string) ([]*FileInfo, er
 
 // Copy 复制文件
 func (q *QiniuStorage) Copy(ctx context.Context, srcPath, dstPath string) error {
-	srcKey := q.buildPath(srcPath)
-	dstKey := q.buildPath(dstPath)
+	srcKey := NormalizeObjectKey(srcPath)
+	dstKey := NormalizeObjectKey(dstPath)
 	err := q.bucketManager.Copy(q.config.Bucket, srcKey, q.config.Bucket, dstKey, true)
 	if err != nil {
 		return fmt.Errorf("failed to copy file: %w", err)
@@ -310,8 +316,8 @@ func (q *QiniuStorage) Copy(ctx context.Context, srcPath, dstPath string) error 
 
 // Move 移动文件
 func (q *QiniuStorage) Move(ctx context.Context, srcPath, dstPath string) error {
-	srcKey := q.buildPath(srcPath)
-	dstKey := q.buildPath(dstPath)
+	srcKey := NormalizeObjectKey(srcPath)
+	dstKey := NormalizeObjectKey(dstPath)
 	err := q.bucketManager.Move(q.config.Bucket, srcKey, q.config.Bucket, dstKey, true)
 	if err != nil {
 		return fmt.Errorf("failed to move file: %w", err)
@@ -319,21 +325,9 @@ func (q *QiniuStorage) Move(ctx context.Context, srcPath, dstPath string) error 
 	return nil
 }
 
-// buildPath 构建对象路径
-func (q *QiniuStorage) buildPath(path string) string {
-	path = strings.TrimPrefix(path, "/")
-
-	dateFormat := strings.TrimSpace(q.config.DateFormat)
-	if dateFormat != "" {
-		datePath := time.Now().Format(normalizeDateFormat(dateFormat))
-		path = datePath + "/" + path
-	}
-
-	return path
-}
-
-// buildURL 构建文件 URL
+// buildURL 构建文件 URL（key 已是完整键）
 func (q *QiniuStorage) buildURL(key string) string {
+	key = NormalizeObjectKey(key)
 	scheme := "http"
 	if q.config.UseSSL {
 		scheme = "https"

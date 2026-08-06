@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"bit-labs.cn/owl/provider/router"
 	"github.com/gin-gonic/gin"
@@ -31,7 +33,8 @@ func (i *FileHandle) Upload(ctx *gin.Context) {
 	}
 
 	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
-	objectPath := uuid.NewString() + ext
+	// 目录分类由调用方决定：通用上传按日期拆分
+	objectPath := fmt.Sprintf("%s/%s%s", time.Now().Format("2006/01/02"), uuid.NewString(), ext)
 
 	f, err := fileHeader.Open()
 	if err != nil {

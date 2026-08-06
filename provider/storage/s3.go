@@ -63,11 +63,21 @@ func NewS3Storage(config *S3Config) (*S3Storage, error) {
 	}, nil
 }
 
-// Put 上传文件
+// Put 一次性保存文件；path 为调用方决定的完整对象键
 func (s *S3Storage) Put(ctx context.Context, path string, reader io.Reader, size int64) (*FileInfo, error) {
-	key := s.buildPath(path)
+	_ = size
+	return s.putObject(ctx, NormalizeObjectKey(path), reader)
+}
 
-	// 读取数据并计算 MD5
+// PutStream 流式保存文件；读至 EOF，无需预先知道 size
+func (s *S3Storage) PutStream(ctx context.Context, path string, reader io.Reader) (*FileInfo, error) {
+	return s.putObject(ctx, NormalizeObjectKey(path), reader)
+}
+
+func (s *S3Storage) putObject(ctx context.Context, key string, reader io.Reader) (*FileInfo, error) {
+	if key == "" {
+		return nil, fmt.Errorf("object path is empty")
+	}
 	buf := new(bytes.Buffer)
 	hash := md5.New()
 	tee := io.TeeReader(reader, hash)
@@ -77,25 +87,23 @@ func (s *S3Storage) Put(ctx context.Context, path string, reader io.Reader, size
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
-	// 上传文件
 	result, err := s.uploader.UploadWithContext(ctx, &s3manager.UploadInput{
 		Bucket:      aws.String(s.config.Bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(buf.Bytes()),
-		ContentType: aws.String(MimeType(path)),
+		ContentType: aws.String(MimeType(key)),
 		ACL:         aws.String(s.getACL()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload file: %w", err)
 	}
 
-	// 构建文件信息
 	fileInfo := &FileInfo{
-		Name:        filepath.Base(path),
-		Path:        path,
+		Name:        filepath.Base(key),
+		Path:        key,
 		Size:        int64(buf.Len()),
-		ContentType: MimeType(path),
-		Extension:   filepath.Ext(path),
+		ContentType: MimeType(key),
+		Extension:   filepath.Ext(key),
 		URL:         s.buildURL(key),
 		Hash:        fmt.Sprintf("%x", hash.Sum(nil)),
 		UploadTime:  time.Now(),
@@ -128,7 +136,7 @@ func (s *S3Storage) PutFile(ctx context.Context, path string, localPath string) 
 
 // Get 获取文件
 func (s *S3Storage) Get(ctx context.Context, path string) (io.ReadCloser, error) {
-	key := s.buildPath(path)
+	key := NormalizeObjectKey(path)
 
 	result, err := s.client.GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.config.Bucket),
@@ -143,7 +151,7 @@ func (s *S3Storage) Get(ctx context.Context, path string) (io.ReadCloser, error)
 
 // Delete 删除文件
 func (s *S3Storage) Delete(ctx context.Context, path string) error {
-	key := s.buildPath(path)
+	key := NormalizeObjectKey(path)
 
 	_, err := s.client.DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.config.Bucket),
@@ -158,7 +166,7 @@ func (s *S3Storage) Delete(ctx context.Context, path string) error {
 
 // Exists 检查文件是否存在
 func (s *S3Storage) Exists(ctx context.Context, path string) (bool, error) {
-	key := s.buildPath(path)
+	key := NormalizeObjectKey(path)
 
 	_, err := s.client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(s.config.Bucket),
@@ -179,7 +187,7 @@ func (s *S3Storage) Exists(ctx context.Context, path string) (bool, error) {
 
 // Size 获取文件大小
 func (s *S3Storage) Size(ctx context.Context, path string) (int64, error) {
-	key := s.buildPath(path)
+	key := NormalizeObjectKey(path)
 
 	result, err := s.client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(s.config.Bucket),
@@ -194,7 +202,7 @@ func (s *S3Storage) Size(ctx context.Context, path string) (int64, error) {
 
 // URL 获取文件访问 URL
 func (s *S3Storage) URL(ctx context.Context, path string) (string, error) {
-	key := s.buildPath(path)
+	key := NormalizeObjectKey(path)
 
 	// 如果配置了 URL 前缀，直接使用
 	if s.config.URLPrefix != "" {
@@ -217,7 +225,7 @@ func (s *S3Storage) URL(ctx context.Context, path string) (string, error) {
 
 // List 列出文件
 func (s *S3Storage) List(ctx context.Context, prefix string) ([]*FileInfo, error) {
-	keyPrefix := s.buildPath(prefix)
+	keyPrefix := NormalizeObjectKey(prefix)
 
 	var files []*FileInfo
 
@@ -226,15 +234,9 @@ func (s *S3Storage) List(ctx context.Context, prefix string) ([]*FileInfo, error
 		Prefix: aws.String(keyPrefix),
 	}, func(page *s3.ListObjectsV2Output, lastPage bool) bool {
 		for _, obj := range page.Contents {
-			// 移除前缀，获取相对路径
-			relativePath := strings.TrimPrefix(*obj.Key, keyPrefix)
-			if relativePath == "" {
-				relativePath = *obj.Key
-			}
-
 			fileInfo := &FileInfo{
 				Name:        filepath.Base(*obj.Key),
-				Path:        relativePath,
+				Path:        *obj.Key,
 				Size:        *obj.Size,
 				ContentType: MimeType(*obj.Key),
 				Extension:   filepath.Ext(*obj.Key),
@@ -263,8 +265,8 @@ func (s *S3Storage) List(ctx context.Context, prefix string) ([]*FileInfo, error
 
 // Copy 复制文件
 func (s *S3Storage) Copy(ctx context.Context, srcPath, dstPath string) error {
-	srcKey := s.buildPath(srcPath)
-	dstKey := s.buildPath(dstPath)
+	srcKey := NormalizeObjectKey(srcPath)
+	dstKey := NormalizeObjectKey(dstPath)
 
 	// 构建复制源
 	copySource := fmt.Sprintf("%s/%s", s.config.Bucket, srcKey)
@@ -299,22 +301,9 @@ func (s *S3Storage) Move(ctx context.Context, srcPath, dstPath string) error {
 	return nil
 }
 
-// buildPath 构建对象路径
-func (s *S3Storage) buildPath(path string) string {
-	// 清理路径
-	path = strings.TrimPrefix(path, "/")
-
-	dateFormat := strings.TrimSpace(s.config.DateFormat)
-	if dateFormat != "" {
-		datePath := time.Now().Format(normalizeDateFormat(dateFormat))
-		path = datePath + "/" + path
-	}
-
-	return path
-}
-
-// buildURL 构建文件 URL
+// buildURL 构建文件 URL（key 已是完整键）
 func (s *S3Storage) buildURL(key string) string {
+	key = NormalizeObjectKey(key)
 	if s.config.URLPrefix != "" {
 		return fmt.Sprintf("%s/%s", strings.TrimRight(s.config.URLPrefix, "/"), key)
 	}

@@ -50,11 +50,21 @@ func NewCOSStorage(config *COSConfig) (*COSStorage, error) {
 	}, nil
 }
 
-// Put 上传文件
+// Put 一次性保存文件；path 为调用方决定的完整对象键
 func (c *COSStorage) Put(ctx context.Context, path string, reader io.Reader, size int64) (*FileInfo, error) {
-	key := c.buildPath(path)
+	_ = size
+	return c.putObject(ctx, NormalizeObjectKey(path), reader)
+}
 
-	// 读取数据并计算 MD5
+// PutStream 流式保存文件；读至 EOF，无需预先知道 size
+func (c *COSStorage) PutStream(ctx context.Context, path string, reader io.Reader) (*FileInfo, error) {
+	return c.putObject(ctx, NormalizeObjectKey(path), reader)
+}
+
+func (c *COSStorage) putObject(ctx context.Context, key string, reader io.Reader) (*FileInfo, error) {
+	if key == "" {
+		return nil, fmt.Errorf("object path is empty")
+	}
 	buf := new(bytes.Buffer)
 	hash := md5.New()
 	tee := io.TeeReader(reader, hash)
@@ -63,10 +73,9 @@ func (c *COSStorage) Put(ctx context.Context, path string, reader io.Reader, siz
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
-	// 上传文件
 	_, err := c.client.Object.Put(ctx, key, bytes.NewReader(buf.Bytes()), &cos.ObjectPutOptions{
 		ObjectPutHeaderOptions: &cos.ObjectPutHeaderOptions{
-			ContentType: MimeType(path),
+			ContentType: MimeType(key),
 		},
 	})
 	if err != nil {
@@ -74,11 +83,11 @@ func (c *COSStorage) Put(ctx context.Context, path string, reader io.Reader, siz
 	}
 
 	fileInfo := &FileInfo{
-		Name:        filepath.Base(path),
-		Path:        path,
+		Name:        filepath.Base(key),
+		Path:        key,
 		Size:        int64(buf.Len()),
-		ContentType: MimeType(path),
-		Extension:   filepath.Ext(path),
+		ContentType: MimeType(key),
+		Extension:   filepath.Ext(key),
 		URL:         c.buildURL(key),
 		Hash:        fmt.Sprintf("%x", hash.Sum(nil)),
 		UploadTime:  time.Now(),
@@ -110,7 +119,7 @@ func (c *COSStorage) PutFile(ctx context.Context, path string, localPath string)
 
 // Get 获取文件
 func (c *COSStorage) Get(ctx context.Context, path string) (io.ReadCloser, error) {
-	key := c.buildPath(path)
+	key := NormalizeObjectKey(path)
 	resp, err := c.client.Object.Get(ctx, key, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file: %w", err)
@@ -120,7 +129,7 @@ func (c *COSStorage) Get(ctx context.Context, path string) (io.ReadCloser, error
 
 // Delete 删除文件
 func (c *COSStorage) Delete(ctx context.Context, path string) error {
-	key := c.buildPath(path)
+	key := NormalizeObjectKey(path)
 	_, err := c.client.Object.Delete(ctx, key)
 	if err != nil {
 		return fmt.Errorf("failed to delete file: %w", err)
@@ -130,7 +139,7 @@ func (c *COSStorage) Delete(ctx context.Context, path string) error {
 
 // Exists 检查文件是否存在
 func (c *COSStorage) Exists(ctx context.Context, path string) (bool, error) {
-	key := c.buildPath(path)
+	key := NormalizeObjectKey(path)
 	resp, err := c.client.Object.Head(ctx, key, nil)
 	if err != nil {
 		if e, ok := err.(*cos.ErrorResponse); ok && e.Response != nil && e.Response.StatusCode == http.StatusNotFound {
@@ -146,7 +155,7 @@ func (c *COSStorage) Exists(ctx context.Context, path string) (bool, error) {
 
 // Size 获取文件大小
 func (c *COSStorage) Size(ctx context.Context, path string) (int64, error) {
-	key := c.buildPath(path)
+	key := NormalizeObjectKey(path)
 	resp, err := c.client.Object.Head(ctx, key, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get file size: %w", err)
@@ -168,7 +177,7 @@ func (c *COSStorage) Size(ctx context.Context, path string) (int64, error) {
 
 // URL 获取文件访问 URL
 func (c *COSStorage) URL(ctx context.Context, path string) (string, error) {
-	key := c.buildPath(path)
+	key := NormalizeObjectKey(path)
 	// 如果配置了 URL 前缀，直接使用
 	if c.config.URLPrefix != "" {
 		return fmt.Sprintf("%s/%s", strings.TrimRight(c.config.URLPrefix, "/"), key), nil
@@ -179,7 +188,7 @@ func (c *COSStorage) URL(ctx context.Context, path string) (string, error) {
 
 // List 列出文件
 func (c *COSStorage) List(ctx context.Context, prefix string) ([]*FileInfo, error) {
-	objectPrefix := c.buildPath(prefix)
+	objectPrefix := NormalizeObjectKey(prefix)
 	var files []*FileInfo
 
 	marker := ""
@@ -193,15 +202,9 @@ func (c *COSStorage) List(ctx context.Context, prefix string) ([]*FileInfo, erro
 		}
 
 		for _, obj := range v.Contents {
-			// 相对路径
-			relativePath := strings.TrimPrefix(obj.Key, objectPrefix)
-			if relativePath == "" {
-				relativePath = obj.Key
-			}
-
 			files = append(files, &FileInfo{
 				Name:        filepath.Base(obj.Key),
-				Path:        relativePath,
+				Path:        obj.Key,
 				Size:        obj.Size,
 				ContentType: MimeType(obj.Key),
 				Extension:   filepath.Ext(obj.Key),
@@ -227,8 +230,8 @@ func (c *COSStorage) List(ctx context.Context, prefix string) ([]*FileInfo, erro
 
 // Copy 复制文件
 func (c *COSStorage) Copy(ctx context.Context, srcPath, dstPath string) error {
-	srcKey := c.buildPath(srcPath)
-	dstKey := c.buildPath(dstPath)
+	srcKey := NormalizeObjectKey(srcPath)
+	dstKey := NormalizeObjectKey(dstPath)
 
 	// 源 URL 必须为 COS 端点 URL
 	scheme := "https"
@@ -252,19 +255,9 @@ func (c *COSStorage) Move(ctx context.Context, srcPath, dstPath string) error {
 	return c.Delete(ctx, srcPath)
 }
 
-// buildPath 构建对象路径
-func (c *COSStorage) buildPath(path string) string {
-	path = strings.TrimPrefix(path, "/")
-	dateFormat := strings.TrimSpace(c.config.DateFormat)
-	if dateFormat != "" {
-		datePath := time.Now().Format(normalizeDateFormat(dateFormat))
-		path = datePath + "/" + path
-	}
-	return path
-}
-
-// buildURL 构建文件 URL（默认端点）
+// buildURL 构建文件 URL（key 已是完整键）
 func (c *COSStorage) buildURL(key string) string {
+	key = NormalizeObjectKey(key)
 	if c.config.URLPrefix != "" {
 		return fmt.Sprintf("%s/%s", strings.TrimRight(c.config.URLPrefix, "/"), key)
 	}

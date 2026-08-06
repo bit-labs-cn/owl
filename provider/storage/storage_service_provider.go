@@ -31,6 +31,7 @@ func (s *StorageServiceProvider) Register() {
 
 		// 初始化存储管理器
 		manager := NewStorageManager()
+		manager.SetOptions(&opt)
 
 		// 初始化本地存储
 		if opt.Local.Root != "" {

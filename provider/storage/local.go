@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // LocalStorage 本地存储实现
@@ -23,12 +22,23 @@ func NewLocalStorage(config *LocalConfig) *LocalStorage {
 	}
 }
 
-// Put 上传文件
+// Put 一次性保存文件；path 为调用方决定的完整对象键
 func (ls *LocalStorage) Put(ctx context.Context, path string, reader io.Reader, size int64) (*FileInfo, error) {
-	// 构建完整路径
-	fullPath := ls.buildPath(path)
+	_ = size
+	return ls.putObject(NormalizeObjectKey(path), reader)
+}
 
-	// 创建目录
+// PutStream 流式保存文件；读至 EOF，无需预先知道 size
+func (ls *LocalStorage) PutStream(ctx context.Context, path string, reader io.Reader) (*FileInfo, error) {
+	return ls.putObject(NormalizeObjectKey(path), reader)
+}
+
+func (ls *LocalStorage) putObject(objectKey string, reader io.Reader) (*FileInfo, error) {
+	if objectKey == "" {
+		return nil, fmt.Errorf("object path is empty")
+	}
+	fullPath := ls.fullPath(objectKey)
+
 	if ls.config.CreateDirs {
 		dir := filepath.Dir(fullPath)
 		if err := os.MkdirAll(dir, os.FileMode(ls.config.DirMode)); err != nil {
@@ -36,45 +46,38 @@ func (ls *LocalStorage) Put(ctx context.Context, path string, reader io.Reader, 
 		}
 	}
 
-	// 创建文件
 	file, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(ls.config.FileMode))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create file: %w", err)
 	}
 	defer file.Close()
 
-	// 计算文件哈希
 	hash := md5.New()
 	multiWriter := io.MultiWriter(file, hash)
 
-	// 复制数据
 	written, err := io.Copy(multiWriter, reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	// 获取文件信息
 	stat, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file stat: %w", err)
 	}
 
-	// 构建文件信息
-	fileInfo := &FileInfo{
-		Name:       filepath.Base(path),
-		Path:       path,
+	return &FileInfo{
+		Name:       filepath.Base(objectKey),
+		Path:       objectKey,
 		Size:       written,
-		Extension:  filepath.Ext(path),
-		URL:        ls.buildURL(path),
+		Extension:  filepath.Ext(objectKey),
+		URL:        ls.buildURL(objectKey),
 		Hash:       fmt.Sprintf("%x", hash.Sum(nil)),
 		UploadTime: stat.ModTime(),
 		Metadata:   make(map[string]string),
-	}
-
-	return fileInfo, nil
+	}, nil
 }
 
-// PutFile 上传本地文件
+// PutFile 上传本地文件到指定对象键
 func (ls *LocalStorage) PutFile(ctx context.Context, path string, localPath string) (*FileInfo, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
@@ -92,7 +95,7 @@ func (ls *LocalStorage) PutFile(ctx context.Context, path string, localPath stri
 
 // Get 获取文件
 func (ls *LocalStorage) Get(ctx context.Context, path string) (io.ReadCloser, error) {
-	fullPath := ls.buildPath(path)
+	fullPath := ls.fullPath(NormalizeObjectKey(path))
 
 	file, err := os.Open(fullPath)
 	if err != nil {
@@ -107,7 +110,7 @@ func (ls *LocalStorage) Get(ctx context.Context, path string) (io.ReadCloser, er
 
 // Delete 删除文件
 func (ls *LocalStorage) Delete(ctx context.Context, path string) error {
-	fullPath := ls.buildPath(path)
+	fullPath := ls.fullPath(NormalizeObjectKey(path))
 
 	if err := os.Remove(fullPath); err != nil {
 		if os.IsNotExist(err) {
@@ -121,7 +124,7 @@ func (ls *LocalStorage) Delete(ctx context.Context, path string) error {
 
 // Exists 检查文件是否存在
 func (ls *LocalStorage) Exists(ctx context.Context, path string) (bool, error) {
-	fullPath := ls.buildPath(path)
+	fullPath := ls.fullPath(NormalizeObjectKey(path))
 
 	_, err := os.Stat(fullPath)
 	if err != nil {
@@ -136,7 +139,7 @@ func (ls *LocalStorage) Exists(ctx context.Context, path string) (bool, error) {
 
 // Size 获取文件大小
 func (ls *LocalStorage) Size(ctx context.Context, path string) (int64, error) {
-	fullPath := ls.buildPath(path)
+	fullPath := ls.fullPath(NormalizeObjectKey(path))
 
 	stat, err := os.Stat(fullPath)
 	if err != nil {
@@ -151,14 +154,14 @@ func (ls *LocalStorage) Size(ctx context.Context, path string) (int64, error) {
 
 // URL 获取文件访问 URL
 func (ls *LocalStorage) URL(ctx context.Context, path string) (string, error) {
-	return ls.buildURL(path), nil
+	return ls.buildURL(NormalizeObjectKey(path)), nil
 }
 
 // List 列出文件
 func (ls *LocalStorage) List(ctx context.Context, prefix string) ([]*FileInfo, error) {
 	var files []*FileInfo
 
-	prefixPath := ls.buildPath(prefix)
+	prefixPath := ls.fullPath(NormalizeObjectKey(prefix))
 
 	err := filepath.Walk(prefixPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -169,13 +172,11 @@ func (ls *LocalStorage) List(ctx context.Context, prefix string) ([]*FileInfo, e
 			return nil
 		}
 
-		// 计算相对路径
 		relPath, err := filepath.Rel(ls.config.Root, path)
 		if err != nil {
 			return err
 		}
 
-		// 标准化路径分隔符
 		relPath = filepath.ToSlash(relPath)
 
 		fileInfo := &FileInfo{
@@ -201,17 +202,15 @@ func (ls *LocalStorage) List(ctx context.Context, prefix string) ([]*FileInfo, e
 
 // Copy 复制文件
 func (ls *LocalStorage) Copy(ctx context.Context, srcPath, dstPath string) error {
-	srcFullPath := ls.buildPath(srcPath)
-	dstFullPath := ls.buildPath(dstPath)
+	srcFullPath := ls.fullPath(NormalizeObjectKey(srcPath))
+	dstFullPath := ls.fullPath(NormalizeObjectKey(dstPath))
 
-	// 打开源文件
 	srcFile, err := os.Open(srcFullPath)
 	if err != nil {
 		return fmt.Errorf("failed to open source file: %w", err)
 	}
 	defer srcFile.Close()
 
-	// 创建目标目录
 	if ls.config.CreateDirs {
 		dir := filepath.Dir(dstFullPath)
 		if err := os.MkdirAll(dir, os.FileMode(ls.config.DirMode)); err != nil {
@@ -219,14 +218,12 @@ func (ls *LocalStorage) Copy(ctx context.Context, srcPath, dstPath string) error
 		}
 	}
 
-	// 创建目标文件
 	dstFile, err := os.OpenFile(dstFullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(ls.config.FileMode))
 	if err != nil {
 		return fmt.Errorf("failed to create destination file: %w", err)
 	}
 	defer dstFile.Close()
 
-	// 复制数据
 	_, err = io.Copy(dstFile, srcFile)
 	if err != nil {
 		return fmt.Errorf("failed to copy file: %w", err)
@@ -237,10 +234,9 @@ func (ls *LocalStorage) Copy(ctx context.Context, srcPath, dstPath string) error
 
 // Move 移动文件
 func (ls *LocalStorage) Move(ctx context.Context, srcPath, dstPath string) error {
-	srcFullPath := ls.buildPath(srcPath)
-	dstFullPath := ls.buildPath(dstPath)
+	srcFullPath := ls.fullPath(NormalizeObjectKey(srcPath))
+	dstFullPath := ls.fullPath(NormalizeObjectKey(dstPath))
 
-	// 创建目标目录
 	if ls.config.CreateDirs {
 		dir := filepath.Dir(dstFullPath)
 		if err := os.MkdirAll(dir, os.FileMode(ls.config.DirMode)); err != nil {
@@ -248,7 +244,6 @@ func (ls *LocalStorage) Move(ctx context.Context, srcPath, dstPath string) error
 		}
 	}
 
-	// 移动文件
 	if err := os.Rename(srcFullPath, dstFullPath); err != nil {
 		return fmt.Errorf("failed to move file: %w", err)
 	}
@@ -256,34 +251,16 @@ func (ls *LocalStorage) Move(ctx context.Context, srcPath, dstPath string) error
 	return nil
 }
 
-// buildPath 构建完整路径
-func (ls *LocalStorage) buildPath(path string) string {
-	// 清理路径
-	path = filepath.Clean(path)
-	path = strings.TrimPrefix(path, "/")
-
-	dateFormat := strings.TrimSpace(ls.config.DateFormat)
-	if dateFormat != "" {
-		datePath := time.Now().Format(normalizeDateFormat(dateFormat))
-		path = filepath.Join(datePath, path)
-	}
-
-	return filepath.Join(ls.config.Root, path)
+func (ls *LocalStorage) fullPath(objectKey string) string {
+	objectKey = NormalizeObjectKey(objectKey)
+	return filepath.Join(ls.config.Root, filepath.FromSlash(objectKey))
 }
 
-// buildURL 构建访问 URL
-func (ls *LocalStorage) buildURL(path string) string {
-	// 清理路径
-	path = filepath.Clean(path)
-	path = strings.TrimPrefix(path, "/")
-	path = filepath.ToSlash(path)
-
-	dateFormat := strings.TrimSpace(ls.config.DateFormat)
-	if dateFormat != "" {
-		datePath := time.Now().Format(normalizeDateFormat(dateFormat))
-		path = datePath + "/" + path
-	}
-
+func (ls *LocalStorage) buildURL(objectKey string) string {
+	objectKey = NormalizeObjectKey(objectKey)
 	urlPrefix := strings.TrimSuffix(ls.config.URLPrefix, "/")
-	return urlPrefix + "/" + path
+	if objectKey == "" {
+		return urlPrefix
+	}
+	return urlPrefix + "/" + objectKey
 }

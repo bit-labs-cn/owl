@@ -34,7 +34,6 @@ type LocalConfig struct {
 	CreateDirs bool   `json:"create-dirs"`
 	DirMode    uint32 `json:"dir-mode"`
 	FileMode   uint32 `json:"file-mode"`
-	DateFormat string `json:"date-format"`
 }
 
 // S3Config Amazon S3 配置
@@ -48,7 +47,6 @@ type S3Config struct {
 	PathStyle       bool   `json:"path-style"`
 	ACL             string `json:"acl"`
 	URLPrefix       string `json:"url-prefix"`
-	DateFormat      string `json:"date-format"`
 }
 
 // MinIOConfig MinIO 配置
@@ -60,7 +58,6 @@ type MinIOConfig struct {
 	Bucket          string `json:"bucket"`
 	Region          string `json:"region"`
 	URLPrefix       string `json:"url-prefix"`
-	DateFormat      string `json:"date-format"`
 }
 
 // OSSConfig 阿里云 OSS 配置
@@ -71,29 +68,26 @@ type OSSConfig struct {
 	Bucket          string `json:"bucket"`
 	UseSSL          bool   `json:"use-ssl"`
 	URLPrefix       string `json:"url-prefix"`
-	DateFormat      string `json:"date-format"`
 }
 
 // COSConfig 腾讯云 COS 配置
 type COSConfig struct {
-	SecretID   string `json:"secret-id"`
-	SecretKey  string `json:"secret-key"`
-	Region     string `json:"region"`
-	Bucket     string `json:"bucket"`
-	UseSSL     bool   `json:"use-ssl"`
-	URLPrefix  string `json:"url-prefix"`
-	DateFormat string `json:"date-format"`
+	SecretID  string `json:"secret-id"`
+	SecretKey string `json:"secret-key"`
+	Region    string `json:"region"`
+	Bucket    string `json:"bucket"`
+	UseSSL    bool   `json:"use-ssl"`
+	URLPrefix string `json:"url-prefix"`
 }
 
 // QiniuConfig 七牛云配置
 type QiniuConfig struct {
-	AccessKey  string `json:"access-key"`
-	SecretKey  string `json:"secret-key"`
-	Bucket     string `json:"bucket"`
-	Domain     string `json:"domain"`
-	UseSSL     bool   `json:"use-ssl"`
-	Zone       string `json:"zone"`
-	DateFormat string `json:"date-format"`
+	AccessKey string `json:"access-key"`
+	SecretKey string `json:"secret-key"`
+	Bucket    string `json:"bucket"`
+	Domain    string `json:"domain"`
+	UseSSL    bool   `json:"use-ssl"`
+	Zone      string `json:"zone"`
 }
 
 // UploadConfig 上传配置
@@ -170,7 +164,7 @@ type MonitoringConfig struct {
 // FileInfo 文件信息
 type FileInfo struct {
 	Name        string            `json:"name"`
-	Path        string            `json:"path"`
+	Path        string            `json:"path"` // 相对存储根的对象键（由调用方指定；Get/Delete 必须用此值）
 	Size        int64             `json:"size"`
 	ContentType string            `json:"content_type"`
 	Extension   string            `json:"extension"`
@@ -188,12 +182,16 @@ type UploadResult struct {
 	Error    error     `json:"error,omitempty"`
 }
 
-// Storage 存储接口
+// Storage 存储接口。
+// 驱动只负责在配置的根目录/桶下按对象键读写；目录如何分类由调用方决定。
 type Storage interface {
-	// Put 上传文件
+	// Put 一次性保存文件。path 为完整对象键；size 为内容字节数。
 	Put(ctx context.Context, path string, reader io.Reader, size int64) (*FileInfo, error)
 
-	// PutFile 上传本地文件
+	// PutStream 流式保存文件。path 为完整对象键；读至 EOF，无需预先知道 size。
+	PutStream(ctx context.Context, path string, reader io.Reader) (*FileInfo, error)
+
+	// PutFile 上传本地文件到指定对象键
 	PutFile(ctx context.Context, path string, localPath string) (*FileInfo, error)
 
 	// Get 获取文件
@@ -235,6 +233,16 @@ func NewStorageManager() *StorageManager {
 	}
 }
 
+// SetOptions 保存配置
+func (sm *StorageManager) SetOptions(opt *Options) {
+	sm.options = opt
+}
+
+// Options 返回当前存储配置
+func (sm *StorageManager) Options() *Options {
+	return sm.options
+}
+
 // AddDriver 添加存储驱动
 func (sm *StorageManager) AddDriver(name string, driver Storage) {
 	sm.drivers[name] = driver
@@ -268,7 +276,7 @@ func (sm *StorageManager) Default() (Storage, error) {
 	return sm.GetDriver(sm.defaultDriver)
 }
 
-// Put 使用默认驱动上传文件
+// Put 使用默认驱动一次性保存文件（path 由调用方决定）
 func (sm *StorageManager) Put(ctx context.Context, path string, reader io.Reader, size int64) (*FileInfo, error) {
 	driver, err := sm.Default()
 	if err != nil {
@@ -276,6 +284,26 @@ func (sm *StorageManager) Put(ctx context.Context, path string, reader io.Reader
 	}
 
 	return driver.Put(ctx, path, reader, size)
+}
+
+// PutStream 使用默认驱动流式保存文件（path 由调用方决定）
+func (sm *StorageManager) PutStream(ctx context.Context, path string, reader io.Reader) (*FileInfo, error) {
+	driver, err := sm.Default()
+	if err != nil {
+		return nil, err
+	}
+
+	return driver.PutStream(ctx, path, reader)
+}
+
+// PutFile 使用默认驱动上传本地文件
+func (sm *StorageManager) PutFile(ctx context.Context, path string, localPath string) (*FileInfo, error) {
+	driver, err := sm.Default()
+	if err != nil {
+		return nil, err
+	}
+
+	return driver.PutFile(ctx, path, localPath)
 }
 
 // Get 使用默认驱动获取文件
@@ -318,39 +346,15 @@ func (sm *StorageManager) URL(ctx context.Context, path string) (string, error) 
 	return driver.URL(ctx, path)
 }
 
-func normalizeDateFormat(format string) string {
-	format = strings.TrimSpace(format)
-	if format == "" {
-		return ""
+func NormalizeObjectKey(path string) string {
+	path = strings.TrimSpace(path)
+	path = filepath.ToSlash(path)
+	path = strings.TrimPrefix(path, "/")
+	path = strings.TrimSuffix(path, "/")
+	for strings.Contains(path, "//") {
+		path = strings.ReplaceAll(path, "//", "/")
 	}
-
-	allowed := func(r rune) bool {
-		if r >= '0' && r <= '9' {
-			return true
-		}
-		switch r {
-		case 'Y', 'm', 'd', 'H', 'i', 's', '-', '_', '/', ':', '.', ' ':
-			return true
-		default:
-			return false
-		}
-	}
-
-	for _, r := range format {
-		if !allowed(r) {
-			return format
-		}
-	}
-
-	replacer := strings.NewReplacer(
-		"Y", "2006",
-		"m", "01",
-		"d", "02",
-		"H", "15",
-		"i", "04",
-		"s", "05",
-	)
-	return replacer.Replace(format)
+	return path
 }
 
 // setDefaults 设置默认值
