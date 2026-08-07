@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -12,78 +13,86 @@ import (
 
 // Options MQTT 配置选项
 type Options struct {
-	Broker       string             `json:"broker"`
-	Client       ClientConfig       `json:"client"`
-	TLS          TLSConfig          `json:"tls"`
-	Message      MessageConfig      `json:"message"`
-	Subscription SubscriptionConfig `json:"subscription"`
-	Publish      PublishConfig      `json:"publish"`
-	Logging      LoggingConfig      `json:"logging"`
-	Buffer       BufferConfig       `json:"buffer"`
-	Performance  PerformanceConfig  `json:"performance"`
+	Broker       string             `json:"broker" mapstructure:"broker" yaml:"broker"`
+	Client       ClientConfig       `json:"client" mapstructure:"client" yaml:"client"`
+	TLS          TLSConfig          `json:"tls" mapstructure:"tls" yaml:"tls"`
+	Message      MessageConfig      `json:"message" mapstructure:"message" yaml:"message"`
+	Subscription SubscriptionConfig `json:"subscription" mapstructure:"subscription" yaml:"subscription"`
+	Publish      PublishConfig      `json:"publish" mapstructure:"publish" yaml:"publish"`
+	Logging      LoggingConfig      `json:"logging" mapstructure:"logging" yaml:"logging"`
+	Buffer       BufferConfig       `json:"buffer" mapstructure:"buffer" yaml:"buffer"`
+	Performance  PerformanceConfig  `json:"performance" mapstructure:"performance" yaml:"performance"`
 }
 
 // ClientConfig 客户端配置
 type ClientConfig struct {
-	ID                   string `json:"id"`
-	Username             string `json:"username"`
-	Password             string `json:"password"`
-	CleanSession         bool   `json:"clean-session"`
-	KeepAlive            int    `json:"keep-alive"`
-	ConnectTimeout       int    `json:"connect-timeout"`
-	AutoReconnect        bool   `json:"auto-reconnect"`
-	ReconnectInterval    int    `json:"reconnect-interval"`
-	MaxReconnectAttempts int    `json:"max-reconnect-attempts"`
+	ID                   string `json:"id" mapstructure:"id" yaml:"id"`
+	Username             string `json:"username" mapstructure:"username" yaml:"username"`
+	Password             string `json:"password" mapstructure:"password" yaml:"password"`
+	CleanSession         bool   `json:"clean-session" mapstructure:"clean-session" yaml:"clean-session"`
+	KeepAlive            int    `json:"keep-alive" mapstructure:"keep-alive" yaml:"keep-alive"`
+	ConnectTimeout       int    `json:"connect-timeout" mapstructure:"connect-timeout" yaml:"connect-timeout"`
+	AutoReconnect        bool   `json:"auto-reconnect" mapstructure:"auto-reconnect" yaml:"auto-reconnect"`
+	ReconnectInterval    int    `json:"reconnect-interval" mapstructure:"reconnect-interval" yaml:"reconnect-interval"`
+	MaxReconnectInterval int    `json:"max-reconnect-interval" mapstructure:"max-reconnect-interval" yaml:"max-reconnect-interval"`
+	ConnectRetry         bool   `json:"connect-retry" mapstructure:"connect-retry" yaml:"connect-retry"`
+	ResumeSubs           bool   `json:"resume-subs" mapstructure:"resume-subs" yaml:"resume-subs"`
+	MaxReconnectAttempts int    `json:"max-reconnect-attempts" mapstructure:"max-reconnect-attempts" yaml:"max-reconnect-attempts"`
 }
 
 // TLSConfig TLS/SSL 配置
 type TLSConfig struct {
-	Enabled            bool   `json:"enabled"`
-	CertFile           string `json:"cert-file"`
-	KeyFile            string `json:"key-file"`
-	CAFile             string `json:"ca-file"`
-	InsecureSkipVerify bool   `json:"insecure-skip-verify"`
+	Enabled            bool   `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
+	CertFile           string `json:"cert-file" mapstructure:"cert-file" yaml:"cert-file"`
+	KeyFile            string `json:"key-file" mapstructure:"key-file" yaml:"key-file"`
+	CAFile             string `json:"ca-file" mapstructure:"ca-file" yaml:"ca-file"`
+	InsecureSkipVerify bool   `json:"insecure-skip-verify" mapstructure:"insecure-skip-verify" yaml:"insecure-skip-verify"`
 }
 
 // MessageConfig 消息配置
 type MessageConfig struct {
-	DefaultQoS byte `json:"default-qos"`
-	Retain     bool `json:"retain"`
-	Timeout    int  `json:"timeout"`
+	DefaultQoS byte `json:"default-qos" mapstructure:"default-qos" yaml:"default-qos"`
+	Retain     bool `json:"retain" mapstructure:"retain" yaml:"retain"`
+	Timeout    int  `json:"timeout" mapstructure:"timeout" yaml:"timeout"`
 }
 
 // SubscriptionConfig 订阅配置
 type SubscriptionConfig struct {
-	DefaultQoS byte `json:"default-qos"`
-	Timeout    int  `json:"timeout"`
+	DefaultQoS byte `json:"default-qos" mapstructure:"default-qos" yaml:"default-qos"`
+	Timeout    int  `json:"timeout" mapstructure:"timeout" yaml:"timeout"`
 }
 
 // PublishConfig 发布配置
 type PublishConfig struct {
-	DefaultQoS byte `json:"default-qos"`
-	Timeout    int  `json:"timeout"`
-	WaitForAck bool `json:"wait-for-ack"`
+	DefaultQoS byte `json:"default-qos" mapstructure:"default-qos" yaml:"default-qos"`
+	Timeout    int  `json:"timeout" mapstructure:"timeout" yaml:"timeout"`
+	WaitForAck bool `json:"wait-for-ack" mapstructure:"wait-for-ack" yaml:"wait-for-ack"`
 }
 
 // LoggingConfig 日志配置
 type LoggingConfig struct {
-	Debug               bool `json:"debug"`
-	LogConnectionEvents bool `json:"log-connection-events"`
-	LogMessageEvents    bool `json:"log-message-events"`
+	Debug               bool `json:"debug" mapstructure:"debug" yaml:"debug"`
+	LogConnectionEvents bool `json:"log-connection-events" mapstructure:"log-connection-events" yaml:"log-connection-events"`
+	LogMessageEvents    bool `json:"log-message-events" mapstructure:"log-message-events" yaml:"log-message-events"`
 }
 
 // BufferConfig 缓冲区配置
 type BufferConfig struct {
-	SendBufferSize    int `json:"send-buffer-size"`
-	ReceiveBufferSize int `json:"receive-buffer-size"`
-	MessageQueueSize  int `json:"message-queue-size"`
+	SendBufferSize    int `json:"send-buffer-size" mapstructure:"send-buffer-size" yaml:"send-buffer-size"`
+	ReceiveBufferSize int `json:"receive-buffer-size" mapstructure:"receive-buffer-size" yaml:"receive-buffer-size"`
+	MessageQueueSize  int `json:"message-queue-size" mapstructure:"message-queue-size" yaml:"message-queue-size"`
 }
 
 // PerformanceConfig 性能配置
 type PerformanceConfig struct {
-	MaxConcurrentConnections int `json:"max-concurrent-connections"`
-	MessageHandlerCount      int `json:"message-handler-count"`
-	BatchSize                int `json:"batch-size"`
+	MaxConcurrentConnections int `json:"max-concurrent-connections" mapstructure:"max-concurrent-connections" yaml:"max-concurrent-connections"`
+	MessageHandlerCount      int `json:"message-handler-count" mapstructure:"message-handler-count" yaml:"message-handler-count"`
+	BatchSize                int `json:"batch-size" mapstructure:"batch-size" yaml:"batch-size"`
+}
+
+type subscriptionEntry struct {
+	qos      byte
+	callback mqtt.MessageHandler
 }
 
 // MQTTClient MQTT 客户端包装器
@@ -92,25 +101,40 @@ type MQTTClient struct {
 	options *Options
 	ctx     context.Context
 	cancel  context.CancelFunc
+
+	mu   sync.RWMutex
+	subs map[string]subscriptionEntry
 }
 
 // InitMQTT 初始化 MQTT 客户端
 func InitMQTT(opt *Options) *MQTTClient {
-	// 设置默认值
 	setDefaults(opt)
 
-	// 创建客户端选项
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(opt.Broker)
-
-	// 设置客户端 ID
-	if opt.Client.ID != "" {
-		opts.SetClientID(opt.Client.ID)
-	} else {
-		opts.SetClientID(fmt.Sprintf("mqtt-client-%d", time.Now().UnixNano()))
+	clientID := opt.Client.ID
+	if clientID == "" {
+		clientID = fmt.Sprintf("mqtt-client-%d", time.Now().UnixNano())
+		opt.Client.ID = clientID
 	}
 
-	// 设置认证
+	m := &MQTTClient{
+		options: opt,
+		subs:    make(map[string]subscriptionEntry),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.ctx = ctx
+	m.cancel = cancel
+
+	opts := buildClientOptions(opt, m)
+	m.client = mqtt.NewClient(opts)
+	return m
+}
+
+// buildClientOptions 构建 Paho 客户端选项（导出给单测断言）
+func buildClientOptions(opt *Options, m *MQTTClient) *mqtt.ClientOptions {
+	opts := mqtt.NewClientOptions()
+	opts.AddBroker(opt.Broker)
+	opts.SetClientID(opt.Client.ID)
+
 	if opt.Client.Username != "" {
 		opts.SetUsername(opt.Client.Username)
 	}
@@ -118,35 +142,31 @@ func InitMQTT(opt *Options) *MQTTClient {
 		opts.SetPassword(opt.Client.Password)
 	}
 
-	// 设置连接参数
 	opts.SetCleanSession(opt.Client.CleanSession)
 	opts.SetKeepAlive(time.Duration(opt.Client.KeepAlive) * time.Second)
 	opts.SetConnectTimeout(time.Duration(opt.Client.ConnectTimeout) * time.Second)
 	opts.SetAutoReconnect(opt.Client.AutoReconnect)
+	opts.SetResumeSubs(opt.Client.ResumeSubs)
+	opts.SetConnectRetry(opt.Client.ConnectRetry)
+	opts.SetConnectRetryInterval(time.Duration(opt.Client.ReconnectInterval) * time.Second)
+	opts.SetMaxReconnectInterval(time.Duration(opt.Client.MaxReconnectInterval) * time.Second)
+	opts.SetOrderMatters(false)
 
-	if opt.Client.AutoReconnect {
-		opts.SetMaxReconnectInterval(time.Duration(opt.Client.ReconnectInterval) * time.Second)
-	}
-
-	// 设置 TLS
 	if opt.TLS.Enabled {
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: opt.TLS.InsecureSkipVerify,
 		}
-
 		if opt.TLS.CertFile != "" && opt.TLS.KeyFile != "" {
 			cert, err := tls.LoadX509KeyPair(opt.TLS.CertFile, opt.TLS.KeyFile)
 			if err != nil {
-				log.Printf("Failed to load TLS certificate: %v", err)
+				log.Printf("[MQTT] client=%s broker=%s load TLS certificate failed: %v", opt.Client.ID, opt.Broker, err)
 			} else {
 				tlsConfig.Certificates = []tls.Certificate{cert}
 			}
 		}
-
 		opts.SetTLSConfig(tlsConfig)
 	}
 
-	// 设置日志
 	if opt.Logging.Debug {
 		mqtt.DEBUG = log.New(log.Writer(), "[MQTT-DEBUG] ", log.LstdFlags)
 		mqtt.WARN = log.New(log.Writer(), "[MQTT-WARN] ", log.LstdFlags)
@@ -154,40 +174,70 @@ func InitMQTT(opt *Options) *MQTTClient {
 		mqtt.ERROR = log.New(log.Writer(), "[MQTT-ERROR] ", log.LstdFlags)
 	}
 
-	// 设置连接事件处理器
-	if opt.Logging.LogConnectionEvents {
-		opts.SetOnConnectHandler(func(client mqtt.Client) {
-			log.Println("MQTT client connected")
-		})
+	clientID := opt.Client.ID
+	broker := opt.Broker
+	logConn := opt.Logging.LogConnectionEvents
 
-		opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
-			log.Printf("MQTT connection lost: %v", err)
-		})
+	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+		if logConn {
+			log.Printf("[MQTT] connection lost client=%s broker=%s err=%v", clientID, broker, err)
+		}
+	})
+	opts.SetReconnectingHandler(func(_ mqtt.Client, _ *mqtt.ClientOptions) {
+		if logConn {
+			log.Printf("[MQTT] reconnecting client=%s broker=%s", clientID, broker)
+		}
+	})
+	opts.SetOnConnectHandler(func(cli mqtt.Client) {
+		if logConn {
+			log.Printf("[MQTT] connected client=%s broker=%s", clientID, broker)
+		}
+		if m != nil {
+			m.resubscribeAll(cli)
+		}
+	})
 
-		opts.SetReconnectingHandler(func(client mqtt.Client, opts *mqtt.ClientOptions) {
-			log.Println("MQTT client reconnecting...")
-		})
+	return opts
+}
+
+func (m *MQTTClient) resubscribeAll(cli mqtt.Client) {
+	m.mu.RLock()
+	snapshot := make(map[string]subscriptionEntry, len(m.subs))
+	for topic, entry := range m.subs {
+		snapshot[topic] = entry
+	}
+	m.mu.RUnlock()
+
+	if len(snapshot) == 0 {
+		return
 	}
 
-	// 创建客户端
-	client := mqtt.NewClient(opts)
-
-	// 创建上下文
-	ctx, cancel := context.WithCancel(context.Background())
-
-	return &MQTTClient{
-		client:  client,
-		options: opt,
-		ctx:     ctx,
-		cancel:  cancel,
+	timeout := time.Duration(m.options.Subscription.Timeout) * time.Second
+	for topic, entry := range snapshot {
+		token := cli.Subscribe(topic, entry.qos, entry.callback)
+		ok := token.WaitTimeout(timeout)
+		if !ok {
+			log.Printf("[MQTT] re-subscribe timeout client=%s broker=%s topic=%s", m.options.Client.ID, m.options.Broker, topic)
+			continue
+		}
+		if err := token.Error(); err != nil {
+			log.Printf("[MQTT] re-subscribe failed client=%s broker=%s topic=%s err=%v", m.options.Client.ID, m.options.Broker, topic, err)
+			continue
+		}
+		if m.options.Logging.LogConnectionEvents {
+			log.Printf("[MQTT] re-subscribed client=%s broker=%s topic=%s qos=%d", m.options.Client.ID, m.options.Broker, topic, entry.qos)
+		}
 	}
 }
 
 // Connect 连接到 MQTT 服务器
 func (m *MQTTClient) Connect() error {
 	token := m.client.Connect()
-	if token.Wait() && token.Error() != nil {
-		return fmt.Errorf("failed to connect to MQTT broker: %w", token.Error())
+	if !token.WaitTimeout(time.Duration(m.options.Client.ConnectTimeout) * time.Second) {
+		return fmt.Errorf("failed to connect to MQTT broker %s: timeout", m.options.Broker)
+	}
+	if err := token.Error(); err != nil {
+		return fmt.Errorf("failed to connect to MQTT broker %s: %w", m.options.Broker, err)
 	}
 	return nil
 }
@@ -208,8 +258,12 @@ func (m *MQTTClient) PublishWithQoS(topic string, payload interface{}, qos byte)
 	token := m.client.Publish(topic, qos, m.options.Message.Retain, payload)
 
 	if m.options.Publish.WaitForAck {
-		if token.WaitTimeout(time.Duration(m.options.Publish.Timeout)*time.Second) && token.Error() != nil {
-			return fmt.Errorf("failed to publish message: %w", token.Error())
+		ok := token.WaitTimeout(time.Duration(m.options.Publish.Timeout) * time.Second)
+		if !ok {
+			return fmt.Errorf("failed to publish message to %s: timeout", topic)
+		}
+		if err := token.Error(); err != nil {
+			return fmt.Errorf("failed to publish message to %s: %w", topic, err)
 		}
 	}
 
@@ -223,19 +277,26 @@ func (m *MQTTClient) Subscribe(topic string, callback mqtt.MessageHandler) error
 
 // SubscribeWithQoS 使用指定 QoS 订阅主题
 func (m *MQTTClient) SubscribeWithQoS(topic string, qos byte, callback mqtt.MessageHandler) error {
-	// 如果启用了消息事件日志，包装回调函数
 	if m.options.Logging.LogMessageEvents {
 		originalCallback := callback
 		callback = func(client mqtt.Client, msg mqtt.Message) {
-			log.Printf("Received message on topic %s: %s", msg.Topic(), string(msg.Payload()))
+			log.Printf("[MQTT] message client=%s topic=%s payload=%s", m.options.Client.ID, msg.Topic(), string(msg.Payload()))
 			originalCallback(client, msg)
 		}
 	}
 
 	token := m.client.Subscribe(topic, qos, callback)
-	if token.WaitTimeout(time.Duration(m.options.Subscription.Timeout)*time.Second) && token.Error() != nil {
-		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, token.Error())
+	ok := token.WaitTimeout(time.Duration(m.options.Subscription.Timeout) * time.Second)
+	if !ok {
+		return fmt.Errorf("failed to subscribe to topic %s: timeout", topic)
 	}
+	if err := token.Error(); err != nil {
+		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
+	}
+
+	m.mu.Lock()
+	m.subs[topic] = subscriptionEntry{qos: qos, callback: callback}
+	m.mu.Unlock()
 
 	return nil
 }
@@ -243,11 +304,32 @@ func (m *MQTTClient) SubscribeWithQoS(topic string, qos byte, callback mqtt.Mess
 // Unsubscribe 取消订阅
 func (m *MQTTClient) Unsubscribe(topics ...string) error {
 	token := m.client.Unsubscribe(topics...)
-	if token.WaitTimeout(time.Duration(m.options.Subscription.Timeout)*time.Second) && token.Error() != nil {
-		return fmt.Errorf("failed to unsubscribe from topics: %w", token.Error())
+	ok := token.WaitTimeout(time.Duration(m.options.Subscription.Timeout) * time.Second)
+	if !ok {
+		return fmt.Errorf("failed to unsubscribe from topics: timeout")
+	}
+	if err := token.Error(); err != nil {
+		return fmt.Errorf("failed to unsubscribe from topics: %w", err)
 	}
 
+	m.mu.Lock()
+	for _, topic := range topics {
+		delete(m.subs, topic)
+	}
+	m.mu.Unlock()
+
 	return nil
+}
+
+// Subscriptions 返回当前登记的订阅主题（用于诊断与测试）
+func (m *MQTTClient) Subscriptions() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]string, 0, len(m.subs))
+	for topic := range m.subs {
+		out = append(out, topic)
+	}
+	return out
 }
 
 // IsConnected 检查连接状态
@@ -262,6 +344,11 @@ func (m *MQTTClient) GetClient() mqtt.Client {
 
 // setDefaults 设置默认值
 func setDefaults(opt *Options) {
+	if opt == nil {
+		return
+	}
+	applyStableReconnectDefaults(&opt.Client)
+
 	if opt.Client.KeepAlive == 0 {
 		opt.Client.KeepAlive = 60
 	}
@@ -270,6 +357,9 @@ func setDefaults(opt *Options) {
 	}
 	if opt.Client.ReconnectInterval == 0 {
 		opt.Client.ReconnectInterval = 5
+	}
+	if opt.Client.MaxReconnectInterval == 0 {
+		opt.Client.MaxReconnectInterval = 60
 	}
 	if opt.Message.Timeout == 0 {
 		opt.Message.Timeout = 30
@@ -297,5 +387,20 @@ func setDefaults(opt *Options) {
 	}
 	if opt.Performance.BatchSize == 0 {
 		opt.Performance.BatchSize = 50
+	}
+}
+
+// applyStableReconnectDefaults 保证长连接订阅场景的稳定重连默认行为。
+// - 零值 Options（测试/代码直构）默认开启 AutoReconnect
+// - 本包装层始终启用 ResumeSubs，并在 OnConnect 中显式重放订阅
+// - AutoReconnect 开启时同步开启首次 ConnectRetry
+func applyStableReconnectDefaults(c *ClientConfig) {
+	if c.KeepAlive == 0 && c.ConnectTimeout == 0 && c.ReconnectInterval == 0 &&
+		c.MaxReconnectInterval == 0 && !c.AutoReconnect && !c.ConnectRetry && !c.ResumeSubs {
+		c.AutoReconnect = true
+	}
+	c.ResumeSubs = true
+	if c.AutoReconnect {
+		c.ConnectRetry = true
 	}
 }

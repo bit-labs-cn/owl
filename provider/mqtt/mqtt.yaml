@@ -4,23 +4,29 @@ broker: tcp://127.0.0.1:1883
 
 # 客户端配置
 client:
-  # 客户端 ID，如果为空则自动生成
+  # 客户端 ID，如果为空则自动生成；多实例部署必须唯一，避免互相踢线
   id: ""
   # 用户名
   username: ""
   # 密码
   password: ""
-  # 清理会话
-  clean-session: true
+  # 清理会话：长连接订阅场景建议 false，由 Broker 保留会话；客户端仍会在 OnConnect 显式重订阅
+  clean-session: false
   # 保持连接时间（秒）
   keep-alive: 60
   # 连接超时时间（秒）
   connect-timeout: 30
   # 自动重连
   auto-reconnect: true
-  # 重连间隔（秒）
+  # 首次连接失败时持续重试
+  connect-retry: true
+  # 重连/首次重试初始间隔（秒）
   reconnect-interval: 5
-  # 最大重连次数，0 表示无限重连
+  # 重连退避上限（秒）
+  max-reconnect-interval: 60
+  # 辅助：Paho ResumeSubs（真正恢复依赖 OnConnect 重放）
+  resume-subs: true
+  # 最大重连次数，0 表示无限重连（由 AutoReconnect 持续尝试）
   max-reconnect-attempts: 0
 
 # TLS/SSL 配置
