@@ -3,6 +3,7 @@ package mqtt
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -10,6 +11,10 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
+
+// ErrConnecting 表示首次 Connect 超时，但 ConnectRetry 仍在后台重试。
+// 调用方必须保留客户端，不能丢弃；后续 OnConnect / IsConnected 会继续推进。
+var ErrConnecting = errors.New("mqtt connection retrying")
 
 // Options MQTT 配置选项
 type Options struct {
@@ -31,6 +36,7 @@ type ClientConfig struct {
 	Password             string `json:"password" mapstructure:"password" yaml:"password"`
 	CleanSession         bool   `json:"clean-session" mapstructure:"clean-session" yaml:"clean-session"`
 	KeepAlive            int    `json:"keep-alive" mapstructure:"keep-alive" yaml:"keep-alive"`
+	PingTimeout          int    `json:"ping-timeout" mapstructure:"ping-timeout" yaml:"ping-timeout"`
 	ConnectTimeout       int    `json:"connect-timeout" mapstructure:"connect-timeout" yaml:"connect-timeout"`
 	AutoReconnect        bool   `json:"auto-reconnect" mapstructure:"auto-reconnect" yaml:"auto-reconnect"`
 	ReconnectInterval    int    `json:"reconnect-interval" mapstructure:"reconnect-interval" yaml:"reconnect-interval"`
@@ -144,6 +150,7 @@ func buildClientOptions(opt *Options, m *MQTTClient) *mqtt.ClientOptions {
 
 	opts.SetCleanSession(opt.Client.CleanSession)
 	opts.SetKeepAlive(time.Duration(opt.Client.KeepAlive) * time.Second)
+	opts.SetPingTimeout(time.Duration(opt.Client.PingTimeout) * time.Second)
 	opts.SetConnectTimeout(time.Duration(opt.Client.ConnectTimeout) * time.Second)
 	opts.SetAutoReconnect(opt.Client.AutoReconnect)
 	opts.SetResumeSubs(opt.Client.ResumeSubs)
@@ -189,18 +196,35 @@ func buildClientOptions(opt *Options, m *MQTTClient) *mqtt.ClientOptions {
 		}
 	})
 	opts.SetOnConnectHandler(func(cli mqtt.Client) {
+		if m != nil {
+			m.onConnect(cli)
+			return
+		}
 		if logConn {
 			log.Printf("[MQTT] connected client=%s broker=%s", clientID, broker)
-		}
-		if m != nil {
-			m.resubscribeAll(cli)
 		}
 	})
 
 	return opts
 }
 
+// onConnect 在独立协程里重放订阅。Paho 禁止在 callback 内 token.Wait / WaitTimeout。
+func (m *MQTTClient) onConnect(cli mqtt.Client) {
+	if m.options != nil && m.options.Logging.LogConnectionEvents {
+		log.Printf("[MQTT] connected client=%s broker=%s", m.options.Client.ID, m.options.Broker)
+	}
+	go m.resubscribeAll(cli)
+}
+
 func (m *MQTTClient) resubscribeAll(cli mqtt.Client) {
+	if m.ctx != nil {
+		select {
+		case <-m.ctx.Done():
+			return
+		default:
+		}
+	}
+
 	m.mu.RLock()
 	snapshot := make(map[string]subscriptionEntry, len(m.subs))
 	for topic, entry := range m.subs {
@@ -214,6 +238,13 @@ func (m *MQTTClient) resubscribeAll(cli mqtt.Client) {
 
 	timeout := time.Duration(m.options.Subscription.Timeout) * time.Second
 	for topic, entry := range snapshot {
+		if m.ctx != nil {
+			select {
+			case <-m.ctx.Done():
+				return
+			default:
+			}
+		}
 		token := cli.Subscribe(topic, entry.qos, entry.callback)
 		ok := token.WaitTimeout(timeout)
 		if !ok {
@@ -230,10 +261,14 @@ func (m *MQTTClient) resubscribeAll(cli mqtt.Client) {
 	}
 }
 
-// Connect 连接到 MQTT 服务器
+// Connect 连接到 MQTT 服务器。
+// ConnectRetry 开启时，超时不丢弃客户端，返回 ErrConnecting 表示后台仍在重试。
 func (m *MQTTClient) Connect() error {
 	token := m.client.Connect()
 	if !token.WaitTimeout(time.Duration(m.options.Client.ConnectTimeout) * time.Second) {
+		if m.options.Client.ConnectRetry {
+			return fmt.Errorf("%w: broker %s", ErrConnecting, m.options.Broker)
+		}
 		return fmt.Errorf("failed to connect to MQTT broker %s: timeout", m.options.Broker)
 	}
 	if err := token.Error(); err != nil {
@@ -285,6 +320,11 @@ func (m *MQTTClient) SubscribeWithQoS(topic string, qos byte, callback mqtt.Mess
 		}
 	}
 
+	// 先登记意图，失败后 OnConnect 仍能补订。
+	m.mu.Lock()
+	m.subs[topic] = subscriptionEntry{qos: qos, callback: callback}
+	m.mu.Unlock()
+
 	token := m.client.Subscribe(topic, qos, callback)
 	ok := token.WaitTimeout(time.Duration(m.options.Subscription.Timeout) * time.Second)
 	if !ok {
@@ -293,10 +333,6 @@ func (m *MQTTClient) SubscribeWithQoS(topic string, qos byte, callback mqtt.Mess
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
 	}
-
-	m.mu.Lock()
-	m.subs[topic] = subscriptionEntry{qos: qos, callback: callback}
-	m.mu.Unlock()
 
 	return nil
 }
@@ -350,7 +386,10 @@ func setDefaults(opt *Options) {
 	applyStableReconnectDefaults(&opt.Client)
 
 	if opt.Client.KeepAlive == 0 {
-		opt.Client.KeepAlive = 60
+		opt.Client.KeepAlive = 10
+	}
+	if opt.Client.PingTimeout == 0 {
+		opt.Client.PingTimeout = 2
 	}
 	if opt.Client.ConnectTimeout == 0 {
 		opt.Client.ConnectTimeout = 30
@@ -359,7 +398,7 @@ func setDefaults(opt *Options) {
 		opt.Client.ReconnectInterval = 5
 	}
 	if opt.Client.MaxReconnectInterval == 0 {
-		opt.Client.MaxReconnectInterval = 60
+		opt.Client.MaxReconnectInterval = 5
 	}
 	if opt.Message.Timeout == 0 {
 		opt.Message.Timeout = 30
@@ -392,7 +431,7 @@ func setDefaults(opt *Options) {
 
 // applyStableReconnectDefaults 保证长连接订阅场景的稳定重连默认行为。
 // - 零值 Options（测试/代码直构）默认开启 AutoReconnect
-// - 本包装层始终启用 ResumeSubs，并在 OnConnect 中显式重放订阅
+// - 本包装层始终启用 ResumeSubs，并在 OnConnect 的独立协程中重放订阅
 // - AutoReconnect 开启时同步开启首次 ConnectRetry
 func applyStableReconnectDefaults(c *ClientConfig) {
 	if c.KeepAlive == 0 && c.ConnectTimeout == 0 && c.ReconnectInterval == 0 &&

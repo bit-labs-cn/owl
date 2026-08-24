@@ -25,7 +25,13 @@ func TestSetDefaultsStableReconnect(t *testing.T) {
 	if opt.Client.ReconnectInterval != 5 {
 		t.Fatalf("ReconnectInterval=%d", opt.Client.ReconnectInterval)
 	}
-	if opt.Client.MaxReconnectInterval != 60 {
+	if opt.Client.KeepAlive != 10 {
+		t.Fatalf("KeepAlive=%d", opt.Client.KeepAlive)
+	}
+	if opt.Client.PingTimeout != 2 {
+		t.Fatalf("PingTimeout=%d", opt.Client.PingTimeout)
+	}
+	if opt.Client.MaxReconnectInterval != 5 {
 		t.Fatalf("MaxReconnectInterval=%d", opt.Client.MaxReconnectInterval)
 	}
 }
@@ -71,6 +77,12 @@ func TestBuildClientOptionsStableReconnect(t *testing.T) {
 	}
 	if reader.MaxReconnectInterval() != 60*time.Second {
 		t.Fatalf("MaxReconnectInterval=%v", reader.MaxReconnectInterval())
+	}
+	if reader.KeepAlive() != 60*time.Second {
+		t.Fatalf("KeepAlive=%v", reader.KeepAlive())
+	}
+	if reader.PingTimeout() != 2*time.Second {
+		t.Fatalf("PingTimeout=%v", reader.PingTimeout())
 	}
 }
 
@@ -150,38 +162,134 @@ func TestSubscribeTimeoutTreatedAsError(t *testing.T) {
 		Subscription: SubscriptionConfig{Timeout: 1},
 	}
 	setDefaults(opt)
+	fake := &fakeMQTTClient{subscribeToken: &fakeToken{waitOK: false}}
 	m := &MQTTClient{
 		options: opt,
-		client:  &fakeMQTTClient{subscribeToken: &fakeToken{waitOK: false}},
+		client:  fake,
 		subs:    make(map[string]subscriptionEntry),
 	}
 	err := m.SubscribeWithQoS("t", 1, func(mqtt.Client, mqtt.Message) {})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if len(m.Subscriptions()) != 0 {
-		t.Fatal("failed subscribe must not register topic")
+	got := m.Subscriptions()
+	if len(got) != 1 || got[0] != "t" {
+		t.Fatalf("failed subscribe must still register topic, got %v", got)
+	}
+
+	fake.subscribeToken = nil
+	m.resubscribeAll(fake)
+	if len(fake.subscribed) != 1 || fake.subscribed[0] != "t" {
+		t.Fatalf("re-subscribe after failed subscribe=%v", fake.subscribed)
 	}
 }
 
-func TestSubscribeErrorNotRegistered(t *testing.T) {
+func TestSubscribeErrorStillRegisteredAndReplayed(t *testing.T) {
 	opt := &Options{
 		Broker:       "tcp://127.0.0.1:1883",
 		Client:       ClientConfig{ID: "sub-err"},
 		Subscription: SubscriptionConfig{Timeout: 1},
 	}
 	setDefaults(opt)
+	fake := &fakeMQTTClient{subscribeToken: &fakeToken{waitOK: true, err: errors.New("broker reject")}}
 	m := &MQTTClient{
 		options: opt,
-		client:  &fakeMQTTClient{subscribeToken: &fakeToken{waitOK: true, err: errors.New("broker reject")}},
+		client:  fake,
 		subs:    make(map[string]subscriptionEntry),
 	}
 	err := m.SubscribeWithQoS("t", 1, func(mqtt.Client, mqtt.Message) {})
 	if err == nil {
 		t.Fatal("expected subscribe error")
 	}
-	if len(m.Subscriptions()) != 0 {
-		t.Fatal("failed subscribe must not register topic")
+	got := m.Subscriptions()
+	if len(got) != 1 || got[0] != "t" {
+		t.Fatalf("failed subscribe must still register topic, got %v", got)
+	}
+
+	fake.subscribeToken = nil
+	m.resubscribeAll(fake)
+	if len(fake.subscribed) != 1 || fake.subscribed[0] != "t" {
+		t.Fatalf("re-subscribe after failed subscribe=%v", fake.subscribed)
+	}
+}
+
+func TestOnConnectDoesNotWaitOnCallbackStack(t *testing.T) {
+	opt := &Options{
+		Broker:       "tcp://127.0.0.1:1883",
+		Client:       ClientConfig{ID: "onconnect-async"},
+		Subscription: SubscriptionConfig{Timeout: 5},
+		Logging:      LoggingConfig{LogConnectionEvents: false},
+	}
+	setDefaults(opt)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	fake := &fakeMQTTClient{subscribeToken: &blockingToken{started: started, release: release}}
+	m := &MQTTClient{
+		options: opt,
+		client:  fake,
+		subs:    map[string]subscriptionEntry{"device/telemetry": {qos: 1, callback: func(mqtt.Client, mqtt.Message) {}}},
+	}
+
+	finished := make(chan struct{})
+	go func() {
+		m.onConnect(fake)
+		close(finished)
+	}()
+
+	select {
+	case <-finished:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("onConnect blocked on Subscribe WaitTimeout")
+	}
+
+	select {
+	case <-started:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("resubscribe did not start in background")
+	}
+	close(release)
+}
+
+func TestConnectTimeoutWithRetryReturnsErrConnecting(t *testing.T) {
+	opt := &Options{
+		Broker: "tcp://127.0.0.1:1883",
+		Client: ClientConfig{ID: "retry-conn", ConnectTimeout: 1, ConnectRetry: true, AutoReconnect: true},
+	}
+	setDefaults(opt)
+	m := &MQTTClient{
+		options: opt,
+		client:  &fakeMQTTClient{connectToken: &fakeToken{waitOK: false}},
+		subs:    make(map[string]subscriptionEntry),
+	}
+	err := m.Connect()
+	if !errors.Is(err, ErrConnecting) {
+		t.Fatalf("got %v want ErrConnecting", err)
+	}
+}
+
+func TestConnectTimeoutWithoutRetryIsFatal(t *testing.T) {
+	opt := &Options{
+		Broker: "tcp://127.0.0.1:1883",
+		Client: ClientConfig{
+			ID:             "fatal-conn",
+			ConnectTimeout: 1,
+			ConnectRetry:   false,
+			AutoReconnect:  false,
+			KeepAlive:      10,
+		},
+	}
+	setDefaults(opt)
+	if opt.Client.ConnectRetry {
+		t.Fatal("expected ConnectRetry false")
+	}
+	m := &MQTTClient{
+		options: opt,
+		client:  &fakeMQTTClient{connectToken: &fakeToken{waitOK: false}},
+		subs:    make(map[string]subscriptionEntry),
+	}
+	err := m.Connect()
+	if err == nil || errors.Is(err, ErrConnecting) {
+		t.Fatalf("got %v, want fatal timeout", err)
 	}
 }
 
@@ -201,16 +309,45 @@ func (t *fakeToken) Done() <-chan struct{} {
 }
 func (t *fakeToken) Error() error { return t.err }
 
+type blockingToken struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (t *blockingToken) Wait() bool { return t.WaitTimeout(0) }
+func (t *blockingToken) WaitTimeout(time.Duration) bool {
+	select {
+	case <-t.started:
+	default:
+		close(t.started)
+	}
+	<-t.release
+	return true
+}
+func (t *blockingToken) Done() <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		<-t.release
+		close(ch)
+	}()
+	return ch
+}
+func (t *blockingToken) Error() error { return nil }
+
 type fakeMQTTClient struct {
 	subscribed     []string
 	subscribeToken mqtt.Token
 	publishToken   mqtt.Token
 	unsubToken     mqtt.Token
+	connectToken   mqtt.Token
 }
 
 func (f *fakeMQTTClient) IsConnected() bool      { return true }
 func (f *fakeMQTTClient) IsConnectionOpen() bool { return true }
 func (f *fakeMQTTClient) Connect() mqtt.Token {
+	if f.connectToken != nil {
+		return f.connectToken
+	}
 	return &fakeToken{waitOK: true}
 }
 func (f *fakeMQTTClient) Disconnect(uint) {}

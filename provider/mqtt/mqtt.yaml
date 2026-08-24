@@ -12,8 +12,10 @@ client:
   password: ""
   # 清理会话：长连接订阅场景建议 false，由 Broker 保留会话；客户端仍会在 OnConnect 显式重订阅
   clean-session: false
-  # 保持连接时间（秒）
-  keep-alive: 60
+  # 保持连接时间（秒）；短 keep-alive 便于更快发现死链
+  keep-alive: 10
+  # PING 超时（秒）
+  ping-timeout: 2
   # 连接超时时间（秒）
   connect-timeout: 30
   # 自动重连
@@ -23,7 +25,7 @@ client:
   # 重连/首次重试初始间隔（秒）
   reconnect-interval: 5
   # 重连退避上限（秒）
-  max-reconnect-interval: 60
+  max-reconnect-interval: 5
   # 辅助：Paho ResumeSubs（真正恢复依赖 OnConnect 重放）
   resume-subs: true
   # 最大重连次数，0 表示无限重连（由 AutoReconnect 持续尝试）
