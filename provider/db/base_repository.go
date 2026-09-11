@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+
 	"gorm.io/gorm"
 )
 
@@ -23,8 +24,7 @@ func NewBaseRepository[T any](db *gorm.DB) BaseRepository[T] {
 
 // Save 保存或者更新， save 会保存所有字段，包括零值字段
 func (i *BaseRepository[T]) Save(data *T) error {
-	db := i.db.Model(data).Save(&data)
-	return db.Error
+	return i.db.Save(data).Error
 }
 
 // Delete 删除数据

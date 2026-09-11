@@ -16,12 +16,20 @@ import (
 func GetModelsByIDs[T any](modelIDs []string) []T {
 	var models []T
 	for _, id := range modelIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || id == "0" {
+			continue
+		}
 		m := *new(T)
 		value := reflect.ValueOf(&m).Elem()
 		fieldType := value.FieldByName("ID").Type()
 		switch fieldType.Kind() {
 		case reflect.Uint:
-			value.FieldByName("ID").SetUint(cast.ToUint64(id))
+			uid := cast.ToUint64(id)
+			if uid == 0 {
+				continue
+			}
+			value.FieldByName("ID").SetUint(uid)
 		case reflect.String:
 			value.FieldByName("ID").SetString(id)
 		default:
@@ -31,6 +39,54 @@ func GetModelsByIDs[T any](modelIDs []string) []T {
 		models = append(models, m)
 	}
 	return models
+}
+
+// ReplaceJoinTable 只维护 many2many 中间表，不 Create/Update 关联实体。
+// GORM 1.25+ 的 Association.Replace 会 upsert 关联对象；传入仅有 ID 的零值 struct 会插入空记录。
+// 另外 Omit("Assoc.*") 后 Replace 不会删掉「相同关联 ID」的旧中间表行，中间表若无唯一约束就会 1→2→4 翻倍。
+func ReplaceJoinTable(tx *gorm.DB, model any, association string, values any) error {
+	values = uniqueAssocByID(values)
+	if err := tx.Model(model).Association(association).Clear(); err != nil {
+		return err
+	}
+	rv := reflect.ValueOf(values)
+	if !rv.IsValid() || (rv.Kind() == reflect.Slice && rv.Len() == 0) {
+		return nil
+	}
+	return tx.Omit(association+".*").Model(model).Association(association).Append(values)
+}
+
+func uniqueAssocByID(values any) any {
+	rv := reflect.ValueOf(values)
+	if rv.Kind() == reflect.Ptr {
+		if rv.IsNil() {
+			return values
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Slice {
+		return values
+	}
+	seen := map[string]struct{}{}
+	out := reflect.MakeSlice(rv.Type(), 0, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		elem := rv.Index(i)
+		idField := reflect.Indirect(elem).FieldByName("ID")
+		if !idField.IsValid() {
+			out = reflect.Append(out, elem)
+			continue
+		}
+		key := fmt.Sprint(idField.Interface())
+		if key == "" || key == "0" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = reflect.Append(out, elem)
+	}
+	return out.Interface()
 }
 
 // AppendWhereFromStruct 根据结构体中的字段名，生成 where 条件
