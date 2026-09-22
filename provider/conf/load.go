@@ -51,6 +51,9 @@ func NewConfigure(app foundation.Application, bus EventBus.Bus) *Configure {
 		}
 		cfgMap := make(map[string]any)
 		ext := strings.Replace(filepath.Ext(info.Name()), ".", "", -1)
+		if ext != "yaml" && ext != "yml" && ext != "json" && ext != "toml" {
+			return nil
+		}
 		name := strings.Replace(info.Name(), "."+ext, "", -1)
 		absPath, v := manager.load(name, ext, &cfgMap)
 		cfgMap["abs-path"] = absPath
