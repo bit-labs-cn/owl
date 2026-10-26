@@ -30,7 +30,7 @@ type RouterInfo struct {
 	Description      string          `json:"description"`      // 描述
 	AccessLevel      AccessLevel     `json:"accessLevel"`      // 访问级别
 	handle           gin.HandlerFunc // 处理函数
-	operateLog       bool            // 是否记录操作日志
+	OperateLog       bool            `json:"operateLog"` // 是否记录操作日志
 }
 
 // 全局路由注册表，用于保存所有注册进来的路由
@@ -117,7 +117,7 @@ func (i *RouterInfoBuilder) add(method, path string, accessLevel AccessLevel, ha
 		Module:           i.moduleZh,
 		AccessLevel:      accessLevel,
 		handle:           handle,
-		operateLog:       method != http.MethodGet,
+		OperateLog:       method != http.MethodGet,
 	}
 
 	return i
@@ -182,12 +182,12 @@ func (i *RouterInfoBuilder) Name(n string) *RouterInfoBuilder {
 }
 
 func (i *RouterInfoBuilder) WithoutOperateLog() *RouterInfoBuilder {
-	i.currentRouter.operateLog = false
+	i.currentRouter.OperateLog = false
 	return i
 }
 
 func (i *RouterInfoBuilder) WithOperateLog() *RouterInfoBuilder {
-	i.currentRouter.operateLog = true
+	i.currentRouter.OperateLog = true
 	return i
 }
 
@@ -219,7 +219,7 @@ func (i *RouterInfoBuilder) GetMenu() *Menu {
 }
 
 func (i RouterInfo) ShouldOperateLog() bool {
-	return i.operateLog
+	return i.OperateLog
 }
 
 // 获取函数名
