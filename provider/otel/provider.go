@@ -76,14 +76,36 @@ func New(cfg Options, serviceName string) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	res, err := processResource(context.Background(), name)
+	if err != nil {
+		return nil, fmt.Errorf("otel resource: %w", err)
+	}
 	p.tp = sdktrace.NewTracerProvider(
 		sdktrace.WithSpanProcessor(sdktrace.NewBatchSpanProcessor(exp)),
-		sdktrace.WithResource(sdkresource.NewSchemaless(attribute.String("service.name", name))),
+		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(normalizedRatio(cfg.SampleRatio)))),
 	)
 	otelapi.SetTracerProvider(p.tp)
 	setInstalled(p)
 	return p, nil
+}
+
+// processResource 构造进程资源。service.name 标识服务，主机、系统和进程属性供后端展示。
+func processResource(ctx context.Context, serviceName string) (*sdkresource.Resource, error) {
+	res, err := sdkresource.New(ctx,
+		sdkresource.WithAttributes(attribute.String("service.name", serviceName)),
+		sdkresource.WithHost(),
+		sdkresource.WithOS(),
+		sdkresource.WithProcessPID(),
+		sdkresource.WithProcessExecutableName(),
+		sdkresource.WithProcessRuntimeName(),
+		sdkresource.WithProcessRuntimeVersion(),
+		sdkresource.WithTelemetrySDK(),
+	)
+	if err != nil && !errors.Is(err, sdkresource.ErrPartialResource) {
+		return nil, err
+	}
+	return res, nil
 }
 
 func newExporter(ctx context.Context, cfg Options) (sdktrace.SpanExporter, error) {

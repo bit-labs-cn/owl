@@ -63,6 +63,25 @@ func TestNew_rejectsProtocol(t *testing.T) {
 	}
 }
 
+func TestProcessResource(t *testing.T) {
+	res, err := processResource(context.Background(), "owl")
+	if err != nil {
+		t.Fatalf("processResource() error = %v", err)
+	}
+	got := map[string]string{}
+	for _, attr := range res.Attributes() {
+		got[string(attr.Key)] = attr.Value.Emit()
+	}
+	if got["service.name"] != "owl" {
+		t.Fatalf("service.name = %q; want owl", got["service.name"])
+	}
+	for _, key := range []string{"host.name", "process.pid", "process.executable.name", "os.type", "telemetry.sdk.language"} {
+		if got[key] == "" {
+			t.Fatalf("missing %s in %v", key, got)
+		}
+	}
+}
+
 func TestResolveServiceName(t *testing.T) {
 	if got := resolveServiceName(nil, Options{}); got != defaultServiceName {
 		t.Fatalf("resolveServiceName() = %q; want %s", got, defaultServiceName)
