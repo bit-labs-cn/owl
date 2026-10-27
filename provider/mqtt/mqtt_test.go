@@ -340,6 +340,8 @@ type fakeMQTTClient struct {
 	publishToken   mqtt.Token
 	unsubToken     mqtt.Token
 	connectToken   mqtt.Token
+	published      any
+	handler        mqtt.MessageHandler
 }
 
 func (f *fakeMQTTClient) IsConnected() bool      { return true }
@@ -351,13 +353,15 @@ func (f *fakeMQTTClient) Connect() mqtt.Token {
 	return &fakeToken{waitOK: true}
 }
 func (f *fakeMQTTClient) Disconnect(uint) {}
-func (f *fakeMQTTClient) Publish(string, byte, bool, interface{}) mqtt.Token {
+func (f *fakeMQTTClient) Publish(_ string, _ byte, _ bool, payload interface{}) mqtt.Token {
+	f.published = payload
 	if f.publishToken != nil {
 		return f.publishToken
 	}
 	return &fakeToken{waitOK: true}
 }
-func (f *fakeMQTTClient) Subscribe(topic string, _ byte, _ mqtt.MessageHandler) mqtt.Token {
+func (f *fakeMQTTClient) Subscribe(topic string, _ byte, cb mqtt.MessageHandler) mqtt.Token {
+	f.handler = cb
 	if f.subscribeToken != nil {
 		return f.subscribeToken
 	}

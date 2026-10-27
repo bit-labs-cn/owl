@@ -2,10 +2,14 @@ package log
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"bit-labs.cn/owl/contract/log"
+	"bit-labs.cn/owl/provider/otel"
 	"github.com/golang-module/carbon"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -22,16 +26,43 @@ import (
 var _ log.Logger = (*FileImpl)(nil)
 
 type FileImpl struct {
-	options    *FileImplOptions
+	options *FileImplOptions
+	state   *fileState
+	ctx     context.Context
+}
+
+type fileState struct {
+	mu         sync.Mutex
 	l          *zap.SugaredLogger
-	lock       sync.RWMutex
+	writer     *lumberjack.Logger
 	preGetTime string
-	ctx        context.Context
+	closeErr   error
+}
+
+func (s *fileState) closeWriterLocked() error {
+	if s.writer == nil {
+		return nil
+	}
+	err := s.writer.Close()
+	s.writer = nil
+	return err
+}
+
+func (i *FileImpl) close() error {
+	if i == nil || i.state == nil {
+		return nil
+	}
+	i.state.mu.Lock()
+	defer i.state.mu.Unlock()
+	err := i.state.closeWriterLocked()
+	i.state.l = nil
+	return errors.Join(i.state.closeErr, err)
 }
 
 func (i *FileImpl) WithContext(ctx context.Context) log.Logger {
-	i.ctx = ctx
-	return i
+	clone := *i
+	clone.ctx = ctx
+	return &clone
 }
 
 type FileImplOptions struct {
@@ -66,18 +97,19 @@ func NewFileImpl(options *FileImplOptions) *FileImpl {
 
 	l := &FileImpl{
 		options: options,
+		state:   &fileState{},
 	}
 	return l
 }
 
 func (i *FileImpl) Emergency(content ...any) {
 	i.setLogger()
-	i.l.DPanic(content)
+	i.state.l.DPanic(joinArgs(i.withTrace(content)))
 }
 
 func (i *FileImpl) Alert(content ...any) {
 	i.setLogger()
-	i.l.Error(content)
+	i.state.l.Error(joinArgs(i.withTrace(content)))
 }
 
 func (i *FileImpl) Critical(content ...any) {
@@ -86,34 +118,70 @@ func (i *FileImpl) Critical(content ...any) {
 
 func (i *FileImpl) Error(content ...any) {
 	i.setLogger()
-	i.l.Error(content)
+	i.state.l.Error(joinArgs(i.withTrace(content)))
 }
 
 func (i *FileImpl) Warning(content ...any) {
 	i.setLogger()
-	i.l.Warn(content)
+	i.state.l.Warn(joinArgs(i.withTrace(content)))
 }
 
 func (i *FileImpl) Notice(content ...any) {
 	i.setLogger()
-	i.l.Warn(content)
+	i.state.l.Warn(joinArgs(i.withTrace(content)))
 }
 
 func (i *FileImpl) Info(content ...any) {
 	i.setLogger()
-	i.l.Info(content)
+	i.state.l.Info(joinArgs(i.withTrace(content)))
 }
 
 func (i *FileImpl) Debug(content ...any) {
 	i.setLogger()
-	i.l.Debug(content)
+	i.state.l.Debug(joinArgs(i.withTrace(content)))
+}
+
+// joinArgs 用空格分隔参数。zap 的 Info 对相邻字符串不会加空格，键和值会粘成 requestId1793。
+func joinArgs(content []any) string {
+	if len(content) == 0 {
+		return ""
+	}
+	return strings.TrimSuffix(fmt.Sprintln(content...), "\n")
+}
+
+func (i *FileImpl) withTrace(content []any) []any {
+	if hasTraceKey(content) {
+		return content
+	}
+	extra := otel.Fields(i.ctx)
+	if len(extra) == 0 {
+		return content
+	}
+	out := make([]any, 0, len(content)+len(extra))
+	out = append(out, content...)
+	return append(out, extra...)
+}
+
+func hasTraceKey(content []any) bool {
+	for _, v := range content {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		s = strings.TrimSuffix(s, ":")
+		if s == "trace_id" {
+			return true
+		}
+	}
+	return false
 }
 
 // 根据时间轮换，因为随时都有可能发生时间变化，调用日志方法之前需要先调用这个方法
 func (i *FileImpl) setLogger() {
 
-	i.lock.Lock()
-	defer i.lock.Unlock()
+	i.state.mu.Lock()
+	defer i.state.mu.Unlock()
 
 	now := carbon.Now()
 	nowDate := now.ToDateString()
@@ -127,16 +195,19 @@ func (i *FileImpl) setLogger() {
 	}
 
 	// 重新换一个文件来记录日志
-	if i.preGetTime != "" {
-		if nowDate != i.preGetTime {
-			i.l = nil
-			i.preGetTime = nowDate
+	if i.state.preGetTime != "" {
+		if nowDate != i.state.preGetTime {
+			if err := i.state.closeWriterLocked(); err != nil {
+				i.state.closeErr = err
+			}
+			i.state.l = nil
+			i.state.preGetTime = nowDate
 		}
 	} else {
-		i.preGetTime = nowDate
+		i.state.preGetTime = nowDate
 	}
 
-	if i.l != nil {
+	if i.state.l != nil {
 		return
 	}
 
@@ -144,6 +215,7 @@ func (i *FileImpl) setLogger() {
 
 	encoder := getEncoder()
 	writeSyncer := getLogWriter(i.options)
+	i.state.writer = writeSyncer
 	// 打印
 	write2file := zapcore.AddSync(writeSyncer)
 	write2stdout := zapcore.AddSync(os.Stdout)
@@ -155,7 +227,7 @@ func (i *FileImpl) setLogger() {
 
 	zap.AddCaller() //添加将调用函数信息记录到日志中的功能。
 	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
-	i.l = logger.Sugar()
+	i.state.l = logger.Sugar()
 }
 
 func getLogWriter(options *FileImplOptions) *lumberjack.Logger {

@@ -86,10 +86,10 @@ func InternalError(ctx *gin.Context, err error) {
 	if logger != nil && err != nil {
 		logger.Error(
 			"internal error",
-			" requestId:", requestID,
-			" method:", ctx.Request.Method,
-			" path:", ctx.Request.URL.Path,
-			" error:", err.Error(),
+			"requestId:", requestID,
+			"method:", ctx.Request.Method,
+			"path:", ctx.Request.URL.Path,
+			"error:", err.Error(),
 		)
 	}
 	ctx.JSON(http.StatusInternalServerError, Resp{Success: false, Msg: "服务器内部错误，请稍后重试"})

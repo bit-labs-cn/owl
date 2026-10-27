@@ -1,0 +1,10 @@
+# 链路追踪。enabled 为 false 时不导出，Start 仍可调用。
+enabled: false
+# 空则使用 app.yaml 的 app-name，再空则为 owl
+service-name: ""
+# http（4318）或 grpc（4317）
+protocol: http
+endpoint: 127.0.0.1:4318
+insecure: true
+# 小于等于 0 或大于 1 时按 1 全量采样
+sample-ratio: 1

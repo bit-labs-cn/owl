@@ -4,13 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-
-	"bit-labs.cn/owl/contract/log"
-
 	"sync"
 	"time"
 
+	"bit-labs.cn/owl/contract/log"
+	"bit-labs.cn/owl/provider/otel"
 	"github.com/streadway/amqp"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Options RabbitMQ 配置选项
@@ -302,15 +303,43 @@ func (r *RabbitMQClient) BindQueue(queueName, routingKey, exchangeName string) e
 	)
 }
 
-// Publish 发布消息
+// Publish 发布消息。不携带链路上下文。
 func (r *RabbitMQClient) Publish(exchange, routingKey string, body []byte) error {
+	return r.publish(context.Background(), exchange, routingKey, body, false)
+}
+
+// PublishContext 发布消息。ctx 中已有 span 时创建 producer span，并把 traceparent 写入 AMQP header。
+func (r *RabbitMQClient) PublishContext(ctx context.Context, exchange, routingKey string, body []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return r.publish(ctx, exchange, routingKey, body, true)
+}
+
+func (r *RabbitMQClient) publish(ctx context.Context, exchange, routingKey string, body []byte, traced bool) (err error) {
+	var span trace.Span
+	if traced && trace.SpanFromContext(ctx).SpanContext().IsValid() {
+		dest := exchange
+		if dest == "" {
+			dest = routingKey
+		}
+		ctx, span = otel.Start(ctx, dest+" publish", trace.WithSpanKind(trace.SpanKindProducer))
+		defer func() {
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			}
+			span.End()
+		}()
+	}
+
 	ch, err := r.GetChannel("publish")
 	if err != nil {
 		return err
 	}
 
 	if r.options.Producer.ConfirmMode {
-		if err := ch.Confirm(false); err != nil {
+		if err = ch.Confirm(false); err != nil {
 			return fmt.Errorf("failed to put channel in confirm mode: %w", err)
 		}
 	}
@@ -327,6 +356,9 @@ func (r *RabbitMQClient) Publish(exchange, routingKey string, body []byte) error
 	if r.options.Message.Expiration != "" {
 		publishing.Expiration = r.options.Message.Expiration
 	}
+	if span != nil {
+		publishing.Headers = amqp.Table(otel.InjectHeaders(ctx, map[string]interface{}(publishing.Headers)))
+	}
 
 	err = ch.Publish(
 		exchange,
@@ -335,7 +367,6 @@ func (r *RabbitMQClient) Publish(exchange, routingKey string, body []byte) error
 		r.options.Producer.Immediate,
 		publishing,
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
@@ -356,8 +387,11 @@ func (r *RabbitMQClient) Publish(exchange, routingKey string, body []byte) error
 	return nil
 }
 
-// Consume 消费消息
-func (r *RabbitMQClient) Consume(queueName string, handler func(amqp.Delivery)) error {
+// Consume 消费消息。每条消息从 header 提取 trace context，并以 consumer span 调用 handler。
+func (r *RabbitMQClient) Consume(queueName string, handler func(context.Context, amqp.Delivery)) error {
+	if handler == nil {
+		return fmt.Errorf("rabbitmq consume: nil handler")
+	}
 	ch, err := r.GetChannel("consume")
 	if err != nil {
 		return err
@@ -383,8 +417,7 @@ func (r *RabbitMQClient) Consume(queueName string, handler func(amqp.Delivery)) 
 				if !ok {
 					return
 				}
-
-				handler(msg)
+				r.deliver(queueName, msg, handler)
 			case <-r.ctx.Done():
 				return
 			}
@@ -392,6 +425,13 @@ func (r *RabbitMQClient) Consume(queueName string, handler func(amqp.Delivery)) 
 	}()
 
 	return nil
+}
+
+func (r *RabbitMQClient) deliver(queueName string, msg amqp.Delivery, handler func(context.Context, amqp.Delivery)) {
+	ctx := otel.ExtractHeaders(context.Background(), map[string]interface{}(msg.Headers))
+	ctx, span := otel.Start(ctx, queueName+" process", trace.WithSpanKind(trace.SpanKindConsumer))
+	defer span.End()
+	handler(ctx, msg)
 }
 
 // IsConnected 检查连接状态

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	logContract "bit-labs.cn/owl/contract/log"
+	"bit-labs.cn/owl/provider/otel"
 	"github.com/gin-gonic/gin"
 )
 
@@ -75,30 +76,27 @@ func AccessLog(logger logContract.Logger, config AccessLogConfig) gin.HandlerFun
 		if rawQuery != "" {
 			requestPath = requestPath + "?" + rawQuery
 		}
-
-		if status >= 500 {
-			logger.Error(
-				"HTTP请求",
-				" requestId", requestID,
-				" status", status,
-				" method", method,
-				" path", requestPath,
-				" latency", latency.String(),
-				" clientIp", clientIP,
-				" userAgent", userAgent,
-			)
-			return
+		reqCtx := c.Request.Context()
+		args := append([]any{
+			"HTTP请求",
+			"requestId:", requestID,
+			"status", status,
+			"method", method,
+			"path", requestPath,
+			"latency", latency.String(),
+			"clientIp", clientIP,
+			"userAgent", userAgent,
+		}, otel.Fields(reqCtx)...)
+		reqLogger := logger
+		if logger != nil {
+			reqLogger = logger.WithContext(reqCtx)
 		}
 
-		logger.Info(
-			"HTTP请求 ",
-			" requestId", requestID,
-			" status", status,
-			" method", method,
-			" path", requestPath,
-			" latency", latency.String(),
-			" clientIp", clientIP,
-			" userAgent", userAgent,
-		)
+		if status >= 500 {
+			reqLogger.Error(args...)
+			return
+		}
+		args[0] = "HTTP请求 "
+		reqLogger.Info(args...)
 	}
 }

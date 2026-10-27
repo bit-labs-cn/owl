@@ -9,7 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"bit-labs.cn/owl/provider/otel"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ErrConnecting 表示首次 Connect 超时，但 ConnectRetry 仍在后台重试。
@@ -281,6 +284,61 @@ func (m *MQTTClient) Connect() error {
 func (m *MQTTClient) Disconnect() {
 	m.cancel()
 	m.client.Disconnect(250)
+}
+
+// PublishContext 发布消息，并在载荷前写入 trace context。payload 必须是 string 或 []byte。
+func (m *MQTTClient) PublishContext(ctx context.Context, topic string, payload any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, span := otel.Start(ctx, topic+" publish", trace.WithSpanKind(trace.SpanKindProducer))
+	defer span.End()
+
+	body, err := payloadBytes(payload)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+	err = m.PublishWithQoS(topic, otel.WrapPayload(ctx, body), m.options.Publish.DefaultQoS)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
+func payloadBytes(payload any) ([]byte, error) {
+	switch v := payload.(type) {
+	case []byte:
+		return v, nil
+	case string:
+		return []byte(v), nil
+	default:
+		return nil, fmt.Errorf("mqtt publish context: payload must be string or []byte")
+	}
+}
+
+// SubscribeContext 订阅主题。回调收到的 Payload 已去掉追踪前缀，ctx 带有 consumer span。
+func (m *MQTTClient) SubscribeContext(topic string, callback func(context.Context, mqtt.Client, mqtt.Message)) error {
+	if callback == nil {
+		return fmt.Errorf("mqtt subscribe context: nil callback")
+	}
+	return m.Subscribe(topic, func(client mqtt.Client, msg mqtt.Message) {
+		ctx, body := otel.UnwrapPayload(context.Background(), msg.Payload())
+		ctx, span := otel.Start(ctx, msg.Topic()+" process", trace.WithSpanKind(trace.SpanKindConsumer))
+		defer span.End()
+		callback(ctx, client, payloadMessage{Message: msg, payload: body})
+	})
+}
+
+type payloadMessage struct {
+	mqtt.Message
+	payload []byte
+}
+
+func (m payloadMessage) Payload() []byte {
+	return m.payload
 }
 
 // Publish 发布消息

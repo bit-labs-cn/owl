@@ -15,6 +15,7 @@ import (
 	"bit-labs.cn/owl/contract/foundation"
 	logContract "bit-labs.cn/owl/contract/log"
 	"bit-labs.cn/owl/provider/conf"
+	"bit-labs.cn/owl/provider/otel"
 	"bit-labs.cn/owl/provider/router/middleware"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -110,13 +111,15 @@ func (i *RouterServiceProvider) serveTLS(addr string) {
 	}
 }
 
-// Shutdown 优雅关闭 HTTP server。
+// Shutdown 优雅关闭 HTTP server，并刷出链路追踪。
 func (i *RouterServiceProvider) Shutdown(ctx context.Context) error {
-	if i.srv == nil {
-		return nil
+	var httpErr error
+	if i.srv != nil {
+		i.logger.Info("开始关闭 HTTP 服务器")
+		httpErr = i.srv.Shutdown(ctx)
 	}
-	i.logger.Info("开始关闭 HTTP 服务器")
-	return i.srv.Shutdown(ctx)
+	traceErr := otel.Shutdown(ctx)
+	return errors.Join(httpErr, traceErr)
 }
 
 func (i *RouterServiceProvider) buildTLSConfig() (*tls.Config, error) {

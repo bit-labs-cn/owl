@@ -18,6 +18,7 @@ import (
 	"bit-labs.cn/owl/provider/conf"
 	"bit-labs.cn/owl/provider/event"
 	"bit-labs.cn/owl/provider/log"
+	"bit-labs.cn/owl/provider/otel"
 	"bit-labs.cn/owl/provider/router"
 	"bit-labs.cn/owl/utils"
 	"github.com/spf13/cobra"
@@ -334,7 +335,23 @@ func (i *Application) ConsoleShell(rootCmd *cobra.Command) {
 	i.newSubApp(i.subApps...)
 
 	rootCmd.AddCommand(i.commands...)
-	cobra.CheckErr(rootCmd.Execute())
+	execErr := rootCmd.Execute()
+	i.shutdownTelemetry()
+	cobra.CheckErr(execErr)
+}
+
+func (i *Application) shutdownTelemetry() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := i.Invoke(func(p *otel.Provider) {
+		shutErr := p.Shutdown(ctx)
+		if shutErr != nil && i.l != nil {
+			i.l.Error("关闭链路追踪失败", "error", shutErr)
+		}
+	})
+	if err != nil && i.l != nil {
+		i.l.Error("关闭链路追踪失败", "error", err)
+	}
 }
 
 func (i *Application) ShowProviders() {
@@ -365,6 +382,7 @@ func (i *Application) registerBaseServiceProviders() {
 	var baseProviders = []foundation.ServiceProvider{
 		&conf.ConfServiceProvider{},
 		&log.LogServiceProvider{},
+		&otel.TraceServiceProvider{},
 		&event.EventServiceProvider{},
 		&appconf.AppConfigServiceProvider{},
 		&validator.ValidatorServiceProvider{},
@@ -409,6 +427,11 @@ func (i *Application) initLogger() {
 	PanicIf(err)
 }
 
+func (i *Application) initTelemetry() {
+	err := i.Invoke(func(*otel.Provider) {})
+	PanicIf(err)
+}
+
 func (i *Application) newSubApp(subApps ...SubApp) {
 	totalStart := time.Now()
 
@@ -442,6 +465,10 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 	stepStart = time.Now()
 	i.initLogger()
 	i.debugStartup("initLogger", stepStart)
+
+	stepStart = time.Now()
+	i.initTelemetry()
+	i.debugStartup("initTelemetry", stepStart)
 
 	// 判断是否是命令行模式，非命令行模式注册路由和添加菜单
 	if i.isRunningInConsole {
