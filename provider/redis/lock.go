@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	redsync "github.com/go-redsync/redsync/v4"
@@ -43,8 +44,12 @@ func (f *RedisLockerFactory) New() Locker {
 }
 
 func (l *redisLocker) Lock(key string) error {
+	expiry := 10 * time.Second
+	if strings.HasSuffix(key, ":import") {
+		expiry = 3 * time.Minute
+	}
 	l.mutex = l.rs.NewMutex(key,
-		redsync.WithExpiry(10*time.Second),
+		redsync.WithExpiry(expiry),
 		redsync.WithTries(3),
 		redsync.WithRetryDelay(200*time.Millisecond),
 	)
