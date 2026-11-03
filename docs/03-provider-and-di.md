@@ -18,7 +18,7 @@ Provider 结构体同样需要 `app foundation.Application` 字段，框架会�
 ## Register 与 Conf
 
 - **Register()**：在其中通过 `app.Register(func(...) T { ... })`（即 `app.Provide(...)`）向 dig 注册构造函数。其他组件通过依赖该类型自动解析。
-- **Conf()**：返回 `map[string]string`，key 为配置文件名（如 `jwt.yaml`），value 为默认内容。框架在首次启动时若 `conf/` 下无该文件则写入；若已存在则仅做键校验（见 `conf.ValidateConfigKeys`）。
+- **Conf()**：返回 `map[string]string`，key 为配置文件名（如 `jwt.yaml`），value 为默认内容。框架在首次启动时若 `conf/` 下无该文件则写入；若已存在则把默认内容里缺少的键补到原文件对应位置（不覆盖已有值），见 `conf.ValidateConfigKeys`。
 
 ## Boot
 

@@ -393,7 +393,7 @@ func (i *Application) registerBaseServiceProviders() {
 	i.registerProviders(baseProviders...)
 }
 
-// generateProviderConfigs 将各 Provider 的 Conf() 默认配置落盘（已存在则校验缺键）
+// generateProviderConfigs 将各 Provider 的 Conf() 默认配置落盘（已存在则补上缺键，不覆盖已有值）
 func (i *Application) generateProviderConfigs(providers ...foundation.ServiceProvider) {
 	for _, serviceProvider := range providers {
 		i.injectAppInstance(serviceProvider)

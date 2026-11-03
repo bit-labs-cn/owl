@@ -45,7 +45,7 @@ owl.NewApp().ConsoleShell(rootCmd)
 
 为避免首次启动时「配置尚未生成就被 `NewConfigure` Walk」导致 `GetConfig` panic，框架采用两阶段：
 
-1. **先 Conf 落盘**：各 Provider 的 `Conf()`（embed 默认 yaml）在文件不存在时写入 `conf/`；已存在则 `ValidateConfigKeys` 告警缺键，不覆盖。
+1. **先 Conf 落盘**：各 Provider 的 `Conf()`（embed 默认 yaml）在文件不存在时写入 `conf/`；已存在则 `ValidateConfigKeys` 把默认配置里缺少的键补进原文件对应位置，已有值不改。补不进去的键只告警。
 2. **再 Register**：只向 dig 注册构造函数，不读配置。
 3. **全部（base + 子应用）Conf 写完后**：`initLogger()` → `Invoke(Logger)` 首次触发 `NewConfigure`，一次性加载 `conf/` 下全部文件。
 
