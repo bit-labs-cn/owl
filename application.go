@@ -20,6 +20,7 @@ import (
 	"bit-labs.cn/owl/provider/log"
 	"bit-labs.cn/owl/provider/otel"
 	"bit-labs.cn/owl/provider/router"
+	"bit-labs.cn/owl/provider/setting"
 	"bit-labs.cn/owl/utils"
 	"github.com/spf13/cobra"
 	"go.uber.org/dig"
@@ -427,6 +428,19 @@ func (i *Application) initLogger() {
 	PanicIf(err)
 }
 
+// collectConfigs 收集实现了 setting.Registrar 的子系统配置。Web 和命令行都会执行，且在注册路由之前。
+func (i *Application) collectConfigs() {
+	reg := setting.NewRegistry()
+	PanicIf(i.Provide(func() *setting.Registry { return reg }))
+	for _, app := range i.subApps {
+		registrar, ok := app.(setting.Registrar)
+		if !ok {
+			continue
+		}
+		PanicIf(reg.Add(app.Name(), registrar.RegisterConfigs()))
+	}
+}
+
 func (i *Application) initTelemetry() {
 	err := i.Invoke(func(*otel.Provider) {})
 	PanicIf(err)
@@ -469,6 +483,10 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 	stepStart = time.Now()
 	i.initTelemetry()
 	i.debugStartup("initTelemetry", stepStart)
+
+	stepStart = time.Now()
+	i.collectConfigs()
+	i.debugStartup("collectConfigs", stepStart)
 
 	// 判断是否是命令行模式，非命令行模式注册路由和添加菜单
 	if i.isRunningInConsole {

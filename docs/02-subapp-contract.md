@@ -33,6 +33,28 @@ type SubApp interface {
 | **RegisterMigrate()** | 返回待 AutoMigrate 的 GORM model 列表。 |
 | **BeforeMigrate / AfterMigrate** | 统一迁移前后钩子（始终执行）。 |
 
+## 可选：登记系统配置
+
+不改 `SubApp` 接口。需要配置项的子系统额外实现 `setting.Registrar`（`bit-labs.cn/owl/provider/setting`）：
+
+```go
+func (i *SubAppOrder) RegisterConfigs() setting.Catalog {
+    return setting.Catalog{
+        Title: "订单",
+        Groups: []setting.Group{{
+            Key:   "trade",
+            Title: "交易",
+            Items: []setting.Item{{
+                Key: "closeUnpaidMinutes", Title: "未支付关闭时间",
+                Type: setting.TypeInt, Default: "30", Min: 1, Max: 1440,
+            }},
+        }},
+    }
+}
+```
+
+框架在注册路由之前调用它，Web 和命令行都会收集。标识用 `Name()`，页面上的名称用 `Catalog.Title`。配置项的键在同一子系统内唯一。分组最多两级：系统 / 一级 / 二级。一级可以只放配置项，也可以再放一组二级分组；二级只能放配置项。同一组不能同时放配置项和子分组。类型、标题、说明、默认值、是否公开和取值范围都写在配置项上。类型可以是 `string`、`bool`、`int`、`image`。`image` 的值是 `data:image/png;base64,...` 这种 base64，解码后不能超过 200KB，空字符串表示不另存图片。没实现这个接口的子系统不会出现在配置页。
+
 ## 必须持有的 app 字段
 
 **SubApp 结构体必须包含名为 `app` 的字段，类型为 `foundation.Application`。**
