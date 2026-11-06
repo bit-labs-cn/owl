@@ -512,7 +512,14 @@ func (i *Application) newSubApp(subApps ...SubApp) {
 			step = fmt.Sprintf("RegisterMenus[%s]", app.Name())
 			i.debugStartupBegin(step)
 			appStart = time.Now()
-			i.menus = append(i.menus, app.RegisterMenus()...)
+			registered := app.RegisterMenus()
+			for _, menu := range registered {
+				if menu == nil {
+					continue
+				}
+				menu.SubApp = app.Name()
+			}
+			i.menus = append(i.menus, registered...)
 			i.debugStartup(step, appStart)
 		}
 		i.debugStartup("RegisterRouters+Menus(all)", stepStart)

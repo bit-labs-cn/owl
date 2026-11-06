@@ -1,6 +1,8 @@
 package router
 
 import (
+	"strings"
+
 	"bit-labs.cn/owl/utils"
 	"github.com/jinzhu/copier"
 )
@@ -33,6 +35,38 @@ type Menu struct {
 	MenuType             MenuType `json:"menuType"`             // 菜单类型，菜单，按钮
 	DependentsPermission []string `json:"dependentsPermission"` // 此动作需要拥有的api访问权限，如果是按钮，可以设置此字段
 	Children             []*Menu  `json:"children,omitempty"`   // 子菜单
+	SubApp               string   `json:"subApp,omitempty"`     // 注册该根菜单的子系统名称
+}
+
+// FilterMenusBySubApp 只保留根菜单中 SubApp 落在 app 里的项。
+// app 为空时原样返回。多个名称用逗号分隔，例如 "user,sms"。
+func FilterMenusBySubApp(menus []*Menu, app string) []*Menu {
+	names := splitAppNames(app)
+	if len(names) == 0 {
+		return menus
+	}
+	filtered := make([]*Menu, 0, len(menus))
+	for _, menu := range menus {
+		if menu == nil {
+			continue
+		}
+		if _, ok := names[menu.SubApp]; ok {
+			filtered = append(filtered, menu)
+		}
+	}
+	return filtered
+}
+
+func splitAppNames(app string) map[string]struct{} {
+	names := make(map[string]struct{})
+	for _, part := range strings.Split(app, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		names[name] = struct{}{}
+	}
+	return names
 }
 
 // Clone 复制菜单
